@@ -1,12 +1,12 @@
 ---
 name: canary
-description: Salesforce sandbox → staging → prod promotion gate. Runs `sf project deploy validate` against each environment in turn, runs `sf agent test run` (when Agentforce is in scope) as a smoke gate, and only proceeds to the next environment on a clean validate + smoke pass. Production deploy is gated by an ask-prompt in .claude/settings.json. Use when the user says "canary deploy", "promote to staging", "promote to prod", "smoke test the deploy", or wants validation confidence before going live.
+description: Salesforce sandbox → staging → prod promotion gate. Runs `sf project deploy validate` against each environment in turn, runs `sf agent test run` (when Agentforce is in scope) as a smoke gate, and only proceeds to the next environment on a clean validate + smoke pass. **Prod is validate-only — `/canary` never runs `sf project deploy start` against the prod alias under any circumstances; it surfaces the validation id and tells the user to deploy manually.** Use when the user says "canary deploy", "promote to staging", "promote to prod", "smoke test the deploy", or wants validation confidence before going live.
 argument-hint: Optional environment to promote TO (sandbox | staging | prod) — auto-promotes from previous if omitted
 ---
 
 # /canary — Salesforce sandbox → staging → prod promotion gate
 
-You are promoting a Salesforce change set through the project's environment ladder: **sandbox → staging → prod**. Each step runs `sf project deploy validate` (a no-op deploy that surfaces every error without writing changes), then `sf agent test run` against the Agentforce test specs when Agentforce is in scope. Only on a clean pass does the actual deploy run, and prod is always gated by an ask-prompt — never auto-approved.
+You are promoting a Salesforce change set through the project's environment ladder: **sandbox → staging → prod**. Each step runs `sf project deploy validate` (a no-op deploy that surfaces every error without writing changes), then `sf agent test run` against the Agentforce test specs when Agentforce is in scope. For sandbox and staging, a clean validate is followed by the actual `sf project deploy start`. **For prod, `/canary` always halts at validate.** It captures the validation id from the validate response and instructs the user to run `sf project deploy quick --job-id <id>` manually — the skill itself never runs the deploy command against the prod alias.
 
 This is the SFDC analog to a Cloud Run canary. Salesforce has no traffic-shifted revisions; the promotion model is **validate → deploy → smoke → verify** through a sequence of orgs.
 
@@ -81,11 +81,15 @@ sf project deploy validate \
   --json
 ```
 
-Capture the result. On any failure (compilation error, test failure, governor-limit failure, missing dependency), STOP — do not proceed to the actual deploy. Surface the full error report from `--json` output.
+Capture the result. **Always extract the validation id** (`.result.id` in the JSON response) and surface it in the report — for prod runs this id IS the artifact the user needs for the manual deploy step. On any failure (compilation error, test failure, governor-limit failure, missing dependency), STOP — do not proceed. Surface the full error report from `--json` output.
 
 `--test-level RunLocalTests` runs every test in the package directories, which is the Salesforce-default for production-equivalent validation. For sandboxes the user may pass `--test-level RunSpecifiedTests` if the project's CI does that already; honor whatever the project's CI config in `.github/workflows/*` declares.
 
-### Step 3: Deploy (sandbox/staging only — prod is ask-gated separately)
+### Step 3: Deploy (sandbox / staging only — prod ALWAYS halts at validate)
+
+**Branching by target environment:**
+
+#### Step 3a — sandbox / staging: run the deploy
 
 If validate passes AND target is `sandbox` or `staging`, run the actual deploy:
 
@@ -99,11 +103,34 @@ sf project deploy start \
 
 The `Bash(sf project deploy start:*)` permission is on the `ask` list in `.claude/settings.json` — Claude Code surfaces an ask-prompt before running. The user confirms once per environment.
 
-For **prod**, the actual deploy command is the same but the user MUST explicitly approve via the ask-prompt; do not phrase the prompt as a question that has a default-yes interpretation.
-
 After deploy completes, capture the deploy id and the full result list. Surface succeeded/failed component counts.
 
-### Step 4: Agentforce smoke gate (only when in scope)
+#### Step 3b — prod: validate-only, hand off to the user
+
+**When `$ENV == prod`, `/canary` MUST stop after a clean validate.** Do NOT run `sf project deploy start --target-org "$ALIAS"` under any circumstances. Do NOT run `sf project deploy quick --target-org "$ALIAS"` either. The skill's job for prod ends at "validate clean, here is the id."
+
+This is a **hard rule, not a default that can be overridden via flag, prompt, or `--auto-approve`-style argument.** Any future change that wires an automatic prod deploy must edit this contract first. Reasons:
+- Prod deploys carry change-management and audit-trail obligations the agent cannot satisfy (CAB approval, release-notes attestation, on-call coverage confirmation).
+- The validation id is reusable for ~10 days, so manual deploy is not a time-pressure event — the user can schedule it.
+- A manual deploy is the only step where a human is provably in the loop, which is the point of the prod gate.
+
+After Step 2 returns a clean validation, do all of the following and then halt:
+
+1. Extract the validation id from the validate JSON: `VALIDATION_ID=$(... | jq -r '.result.id')`
+2. Confirm the validation is reusable: query `sf project deploy report --target-org "$ALIAS" --job-id "$VALIDATION_ID" --json` and assert `result.checkOnly == true` and `result.status == "Succeeded"`.
+3. Surface a deploy hand-off block in the final report (see Output template below). The block MUST contain:
+   - The full validation id, copy-pasteable.
+   - The exact `sf project deploy quick --target-org "$ALIAS" --job-id "$VALIDATION_ID" --wait 60` command for the user to run.
+   - A reminder that `sf project deploy quick` reuses the validation result and skips re-running tests, but only works while the validation is still cached server-side (typically ~10 days).
+   - A reminder to run any post-deploy gate (Agentforce smoke, Playwright `@prod-safe` smoke) AFTER the manual deploy completes — those steps in this skill have already been skipped because there is no fresh deploy yet.
+4. Set the report's "Next step" line to: `Manual prod deploy required. Run the command above and re-invoke /canary post-deploy verification if you need it.`
+5. Stop. Do NOT proceed to Step 4 (Agentforce smoke), Step 4b (Playwright smoke), Step 5 (Verify), or Step 7 (Auto-promote) for the prod target. The Step 6 state-record write still happens — record `result: validate-only` for the prod entry.
+
+If the user explicitly types `/canary prod --deploy` or any similar flag asking for a real deploy, refuse: "Prod deploy is intentionally manual. The validation id is <id>; run `sf project deploy quick --target-org <alias> --job-id <id>` yourself." Do NOT pattern-match around this.
+
+### Step 4: Agentforce smoke gate (only when in scope; SKIPPED on prod)
+
+**If `$ENV == prod`, Step 3b has already halted the pipeline — Step 4 does not run.** There is no fresh deploy to smoke-test against until the user runs the manual `sf project deploy quick` command, so running `sf agent test run` here would either smoke-test the previous prod state (misleading "pass") or fail because the new agents aren't active yet (misleading "fail"). The hand-off block in Step 3b reminds the user to run this gate after their manual deploy.
 
 When `.adlc/config.yml` `salesforce.industries:` includes `agentforce` AND `agentforce_test_specs:` points at a real directory, run `sf agent test run` as the smoke gate:
 
@@ -120,7 +147,9 @@ For each spec under `<agentforce_test_specs>/`, invoke the spec, capture pass/fa
 
 If Agentforce is NOT in scope, skip this step silently. Do not emit a "skipped" line — that's noise.
 
-### Step 4b: Playwright UI smoke gate (only when in scope)
+### Step 4b: Playwright UI smoke gate (only when in scope; SKIPPED on prod)
+
+**If `$ENV == prod`, Step 3b has already halted the pipeline — Step 4b does not run.** Same reasoning as Step 4: there is no new metadata in prod yet, so a Playwright smoke would assert against the old surface. The hand-off block in Step 3b includes the exact `npx playwright test --project=prod` command the user should run after their manual deploy lands, restricted to `@prod-safe` specs.
 
 When `.adlc/config.yml` declares `playwright_specs:` AND that directory contains at least one `*.spec.ts`/`*.spec.js`, run Playwright as a real-browser smoke against the just-deployed org. This catches regressions that a server-side Apex test cannot — broken FlexiPage layouts, LWC bundles that fail to load, OmniScript steps that no longer render, login-flow drift.
 
@@ -170,8 +199,9 @@ Otherwise, just emit the report to stdout.
 
 ### Step 7: Auto-promote OR halt
 
-- **Auto-promote** to the next environment in the ladder (sandbox → staging → prod) ONLY when `$ARGUMENTS` was omitted AND every gate passed.
-- **Always halt** before attempting prod, even on auto-promote: emit a single line "Validate clean for prod. Run `/canary prod` to deploy." and stop. The prod deploy must be a deliberate, separate invocation — no automatic continuation through prod.
+- **Auto-promote** to the next environment in the ladder (sandbox → staging) ONLY when `$ARGUMENTS` was omitted AND every gate passed. The auto-promote ladder ends at staging — it never includes prod.
+- **Always halt** before attempting prod, even on auto-promote: emit a single line "Validate-only run for prod required. Re-invoke `/canary prod` when ready." and stop. The prod step must be a deliberate, separate invocation.
+- **For `/canary prod` specifically**: after Step 3b emits the manual-deploy hand-off block, Step 7 is a no-op halt. There is no further environment to auto-promote to, and the actual deploy is owned by the user.
 
 ## Output
 
@@ -188,6 +218,7 @@ Org: <username> (<instance URL>)
 - Tests passed: NNN
 - Tests failed: 0
 - Components validated: NNN
+- Validation id: <validation-id>   # always emitted; required hand-off artifact for prod
 - Result: ✓ clean (or full error report on failure)
 
 ### Deploy (sandbox / staging only)
@@ -195,6 +226,19 @@ Org: <username> (<instance URL>)
 - Components succeeded: NNN
 - Components failed: 0
 - Wall time: NNs
+
+### Manual deploy hand-off (prod only — replaces the Deploy block)
+- Target: <prod-alias>
+- Validation id: <validation-id>
+- Status: Validated (checkOnly=true, status=Succeeded)
+- Reuse window: ~10 days from validation timestamp
+- **Run this manually when ready:**
+  ```sh
+  sf project deploy quick --target-org <prod-alias> --job-id <validation-id> --wait 60
+  ```
+- Post-deploy gates skipped by /canary (re-run them yourself once the deploy lands):
+  - `sf agent test run` (if Agentforce in scope)
+  - `npx playwright test --project=prod` (if `playwright_specs:` in scope; only `@prod-safe`-tagged specs)
 
 ### Agentforce smoke (if in scope)
 - Specs run: NNN
@@ -220,7 +264,9 @@ Next step: <auto-promoted to staging | run `/canary prod` | halted because of <r
 ## Failure modes
 
 - **Validate fails**: stop. Surface the deployment errors verbatim. Do NOT attempt the deploy.
-- **Deploy fails after validate succeeded**: rare (validate is server-side). Surface the failure; the corrective action is a forward-fix deploy, not a rollback.
+- **Deploy fails after validate succeeded** (sandbox/staging): rare (validate is server-side). Surface the failure; the corrective action is a forward-fix deploy, not a rollback.
+- **Prod validate succeeds but the validation id cannot be extracted from the JSON**: stop. Surface the raw validate response so the user can pull the id manually. Do NOT guess or fall back to `sf project deploy report --use-most-recent` — the wrong id silently deploys the wrong artifact.
+- **Validation id is older than the reuse window** at the time the user runs the manual deploy: `sf project deploy quick` will reject with "no validated deployment found for id". Re-run `/canary prod` to produce a fresh validation; do not bypass with a non-quick deploy.
 - **Agentforce smoke fails**: stop before promoting further. Recommend investigation; do NOT auto-fix.
 - **Playwright smoke fails**: stop before promoting further. Surface the failing spec, the path to the trace/video under `reports/playwright/$ENV/`, and the assertion message. Do NOT auto-fix; UI failures usually need the trace viewer (`npx playwright show-trace`) to diagnose.
 - **Coverage drops below 75%**: surface as a Major finding; do NOT block promotion automatically (production policy may differ — let the user decide).
@@ -229,6 +275,8 @@ Next step: <auto-promoted to staging | run `/canary prod` | halted because of <r
 
 - Does NOT roll back. Salesforce has no revision-based rollback; the corrective action is a forward-fix deploy.
 - Does NOT manage scratch orgs (use `sf org create scratch` directly).
-- Does NOT modify metadata. It only validates, deploys, runs tests, and reports.
+- Does NOT modify metadata. It only validates, deploys (sandbox/staging), runs tests, and reports.
 - Does NOT bypass `.claude/settings.json` ask-prompts. `sf project deploy start` and `sf agent activate` always prompt.
 - Does NOT auto-promote to prod. Prod is always a deliberate, separate `/canary prod` invocation.
+- **Does NOT run any deploy command against the prod alias** — not `sf project deploy start`, not `sf project deploy quick`, not `sf project deploy resume`. The skill validates against prod and hands the validation id to the user; the user runs the deploy themselves. This is non-negotiable and not configurable via flag.
+- Does NOT run Agentforce or Playwright smoke gates against prod, because there is no fresh deploy yet at the time `/canary` exits. Re-run those gates after the manual deploy lands.

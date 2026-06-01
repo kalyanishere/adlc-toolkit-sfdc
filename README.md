@@ -16,7 +16,7 @@ Skills, agents, templates, and quality gates for spec-driven development on **Sa
 | `/sprint` | Parallel pipeline orchestrator — multiple `/proceed` sessions across REQs (`--workflow` engine + legacy fallback) |
 | `/reflect` | Post-implementation self-review walking salesforce-rules + sf-skill rubrics |
 | `/review` | 6-agent panel (correctness, quality, architecture, tests, security, reflector) loading sf-skill rubrics by file glob |
-| `/canary` | Salesforce sandbox → staging → prod promotion gate (`sf project deploy validate` + `sf agent test run` smoke) |
+| `/canary` | Salesforce sandbox → staging → prod promotion gate (`sf project deploy validate` + `sf agent test run` + Playwright smoke). **Prod is validate-only** — surfaces the validation id and instructs the user to run `sf project deploy quick` manually; the skill never deploys to prod itself. |
 | `/wrapup` | Close out a feature — merge, Permissions.md gate, Agentforce deploy-order gate, knowledge capture, sf deploy |
 | `/bugfix` | Streamlined bug fix workflow |
 | `/status` | Show current state of all ADLC work |
@@ -136,8 +136,10 @@ Required values to fill in:
 ## Workflow
 
 ```
-/spec → /validate → /architect → /validate → implement → /reflect → /review → merge → /wrapup → /canary
+/spec → /validate → /architect → /validate → implement → /reflect → /review → merge → /wrapup → /canary sandbox → /canary staging → /canary prod (validate-only) → manual sf deploy
 ```
+
+`/canary` deploys to sandbox and staging itself, but **for prod it stops at validate**. It surfaces the validation id from `sf project deploy validate` and prints the exact `sf project deploy quick --target-org <prod-alias> --job-id <validation-id>` command for you to run yourself. The skill never executes a deploy command against the prod alias under any circumstances — Agentforce and Playwright smoke gates against prod are skipped for the same reason (no fresh deploy yet) and should be re-run after the manual deploy lands. Validations remain reusable for ~10 days.
 
 For bugs: `/bugfix` (report → analyze → fix → verify → ship)
 
