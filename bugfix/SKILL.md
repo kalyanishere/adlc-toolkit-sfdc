@@ -25,9 +25,39 @@ Bug report: $ARGUMENTS
 
 ## Prerequisites
 
-Before proceeding, verify that `.adlc/bugs/` exists. If it doesn't, stop and tell the user: "The `.adlc/` structure hasn't been initialized. Run `/init` first."
+Before proceeding, verify that `<ARTIFACT_ROOT>/.adlc/bugs/` exists (after Phase 0 has resolved `<ARTIFACT_ROOT>`). If it doesn't, stop and tell the user: "The `.adlc/` structure hasn't been initialized in the main checkout. Run `/init` first."
 
 ## Instructions
+
+### Phase 0: Pin `<ARTIFACT_ROOT>` (do this FIRST)
+
+Resolve and freeze the absolute path of the **main checkout** for the repo this `/bugfix` was invoked from. Every `.adlc/...` write later in this skill — bug report file, lesson, BUG/LESSON counter scans — resolves against `<ARTIFACT_ROOT>`, never against cwd. cwd may be a Claude Code skill-isolation worktree (`.claude/worktrees/<slug>`) or, after Phase 6 Step 5, a directory that has been removed.
+
+Resolve in this order, stopping at the first that succeeds:
+
+1. **Explicit caller arg**: if the invoker passed `--main-root <abs-path>`, use it verbatim.
+2. **From `git worktree list`**:
+   ```bash
+   ARTIFACT_ROOT=$(git worktree list --porcelain | awk '
+     /^worktree /{p=$2}
+     /^branch refs\/heads\/(main|master)$/{print p; exit}
+   ')
+   ```
+3. **Fallback**: if `git rev-parse --abbrev-ref HEAD` reports `main` or `master`, use `git rev-parse --show-toplevel`. Otherwise stop with: "ERROR: cannot resolve `<ARTIFACT_ROOT>` — pass `--main-root` explicitly or run from the main checkout."
+
+Verify it:
+```bash
+git -C "$ARTIFACT_ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "ERROR: ARTIFACT_ROOT=$ARTIFACT_ROOT is not a git repo — aborting" >&2
+  exit 1
+}
+[ -d "$ARTIFACT_ROOT/.adlc/bugs" ] || {
+  echo "ERROR: $ARTIFACT_ROOT/.adlc/bugs missing — wrong checkout? Run /init there first." >&2
+  exit 1
+}
+```
+
+Treat `<ARTIFACT_ROOT>` as **immutable** for the rest of the run. In cross-repo mode, this `<ARTIFACT_ROOT>` is the primary (the repo `/bugfix` was invoked from — where the bug report lives). Sibling-repo writes (the actual code fix) target their own checkouts via `.adlc/config.yml`'s `path:` entries — those paths are read on demand in Phase 3, not pinned here.
 
 ### Phase 1: Report
 1. If given a bug description (not a BUG ID), create a bug report:
@@ -59,9 +89,9 @@ Before proceeding, verify that `.adlc/bugs/` exists. If it doesn't, stop and tel
      # would be silently empty. Guard the parent context (REQ-416 verify D-pass).
      [ -n "$BUG_NUM" ] || { echo "ERROR: failed to allocate BUG number — aborting before writing malformed bug report" >&2; exit 1; }
      ```
-     If `~/.claude/.global-next-bug` doesn't exist, create it by scanning all `.adlc/bugs/` directories under the user's repos root for the highest `BUG-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent directory of the current repo:
+     If `~/.claude/.global-next-bug` doesn't exist, create it by scanning all `.adlc/bugs/` directories under the user's repos root for the highest `BUG-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent of the **main checkout** (use `$ARTIFACT_ROOT`, not cwd — a skill-isolation worktree's parent points at `.claude/worktrees/` and silently misses every actual repo):
      ```bash
-     SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)}"
+     SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$ARTIFACT_ROOT/.." && pwd)}"
      HIGHEST=$(find "$SCAN_ROOT" -path '*/.adlc/bugs/BUG-*' -type f 2>/dev/null \
        | grep -oE 'BUG-[0-9]+' | sed 's/BUG-//' | sort -n | tail -1)
      BUG_NUM=$(( ${HIGHEST:-0} + 1 ))
@@ -69,11 +99,20 @@ Before proceeding, verify that `.adlc/bugs/` exists. If it doesn't, stop and tel
      ```
      If the scan finds nothing (genuinely first BUG across all repos), `HIGHEST` is empty — `BUG_NUM` defaults to 1. Bug reports are `.md` files so the scan uses `-type f`; the analogous REQ-counter scan in `/spec` uses `-type d` because REQ specs are directories (deliberate, do not "correct" to `-type d`).
      Note: the legacy per-repo `.adlc/.next-bug` counter is **deprecated** and no longer consulted — existing files can be left in place but should not be read or written.
-   - Create `.adlc/bugs/BUG-xxx-slug.md` (always in the current repo — this becomes the "primary" for the bug) using the template from `.adlc/templates/bug-template.md`
+   - Create `<ARTIFACT_ROOT>/.adlc/bugs/BUG-xxx-slug.md` (the primary repo for the bug — even when the fix lives in a sibling, the report stays here) using the template from `<ARTIFACT_ROOT>/.adlc/templates/bug-template.md`
    - Fill in: description, reproduction steps (if known), expected vs actual behavior, environment
    - Set status to `open`, severity based on impact
-   - **Cross-repo**: if `.adlc/config.yml` declares siblings AND the bug's fix likely lives in a sibling (e.g., a frontend symptom whose root cause is in a backend repo), add a `repo: <sibling-id>` field to the bug frontmatter. If the fix spans multiple repos, add a `touched_repos: [<id>, <id>]` field. The `repo:` field determines where Phase 3's commit and Phase 4's PR land.
-2. If given a BUG ID, read the existing bug report — note any `repo:` or `touched_repos:` field for routing.
+   - **Cross-repo**: if `<ARTIFACT_ROOT>/.adlc/config.yml` declares siblings AND the bug's fix likely lives in a sibling (e.g., a frontend symptom whose root cause is in a backend repo), add a `repo: <sibling-id>` field to the bug frontmatter. If the fix spans multiple repos, add a `touched_repos: [<id>, <id>]` field. The `repo:` field determines where Phase 3's commit and Phase 4's PR land.
+   - **Commit the bug report on `main` immediately** — the fix may take hours, the report should not sit uncommitted in the working tree:
+     ```bash
+     git -C "$ARTIFACT_ROOT" checkout main
+     git -C "$ARTIFACT_ROOT" pull --ff-only origin main
+     git -C "$ARTIFACT_ROOT" add .adlc/bugs/BUG-xxx-slug.md
+     git -C "$ARTIFACT_ROOT" commit -m "chore(BUG-xxx): file bug report"
+     git -C "$ARTIFACT_ROOT" push origin main
+     ```
+     Substitute the concrete BUG id. If branch protection rejects the push, surface it to the user — they will need to land the report via a tiny PR; do **not** silently leave it uncommitted, or Phase 6's status update will write into a file that's never been seen by the repo's history.
+2. If given a BUG ID, read the existing bug report at `<ARTIFACT_ROOT>/.adlc/bugs/BUG-xxx-slug.md` — note any `repo:` or `touched_repos:` field for routing.
 
 ### Phase 2: Analyze
 1. Launch Explore agents to trace the bug:
@@ -99,11 +138,12 @@ Before proceeding, verify that `.adlc/bugs/` exists. If it doesn't, stop and tel
 ### Phase 4: Verify
 1. Run the test suite: `npm test` (or appropriate test command)
 2. If tests fail, fix and re-run
-3. Update the bug report (do NOT mark `resolved` yet — that happens in Phase 6 after the fix is merged and deployed):
+3. Update the bug report at `<ARTIFACT_ROOT>/.adlc/bugs/BUG-xxx-slug.md` (do NOT mark `resolved` yet — that happens in Phase 6 after the fix is merged and deployed). The report lives on `main` in the main checkout — write directly there; do NOT touch a copy inside a fix worktree:
    - Leave status as `open` (or set to `in-review` if your project uses that value)
    - Fill in "Resolution" section with what was changed and why
    - Fill in "Files Changed" section with specific file paths
    - Update the `updated` date
+   - These edits will be committed in Phase 6 Step 4 (chore-on-main alongside the lesson capture). Do NOT commit them now — leaving them as uncommitted main-checkout edits during Phase 5 is intentional, so that Phase 4's interim summary can still be revised if Phase 5's PR review surfaces additional context.
 4. Present an interim summary:
    - Root cause
    - What was fixed
@@ -187,11 +227,13 @@ If staging deployed but production has NOT yet been promoted, wait — the pipel
 
 If `stack.frontends` doesn't include `ios`, skip this section entirely.
 
-**Step 3 — Update the bug report.**
+**Step 3 — Update the bug report** (write into `<ARTIFACT_ROOT>/.adlc/bugs/BUG-xxx-slug.md` — the main checkout, NOT a fix worktree which may already be removed):
 - Set status to `resolved`
 - Update the `updated` date
 - Confirm Resolution and Files Changed sections are filled in (from Phase 4)
 - Add a Deployment section noting the staging + production revisions
+
+These edits stay uncommitted on `main` for now — they will be staged together with the lesson in Step 4's chore commit.
 
 **Step 4 — Capture knowledge** (NEVER skip — per memory `feedback_wrapup_knowledge_capture.md`).
 
@@ -201,7 +243,7 @@ Evaluate honestly: did this bug reveal something a future implementer should kno
 - A check that would have caught this earlier?
 - An assumption from a prior REQ that turned out false?
 
-If yes, write a lesson to `.adlc/knowledge/lessons/LESSON-xxx-slug.md` using the **global** atomic counter `~/.claude/.global-next-lesson` (shared across all repos for unique IDs, mirroring the REQ/BUG counters — see LESSON-004), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014). The lock path `~/.claude/.global-next-lesson.lock.d` is shared with `/wrapup` so a concurrent `/bugfix` and `/wrapup` mutually exclude and cannot double-allocate the same LESSON id:
+If yes, write a lesson to `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/LESSON-xxx-slug.md` using the **global** atomic counter `~/.claude/.global-next-lesson` (shared across all repos for unique IDs, mirroring the REQ/BUG counters — see LESSON-004), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014). The lock path `~/.claude/.global-next-lesson.lock.d` is shared with `/wrapup` so a concurrent `/bugfix` and `/wrapup` mutually exclude and cannot double-allocate the same LESSON id:
 ```bash
 LESSON_NUM=$(
   LOCK=~/.claude/.global-next-lesson.lock.d
@@ -229,9 +271,9 @@ LESSON_NUM=$(
 # would be silently empty. Guard the parent context (REQ-416 verify D-pass).
 [ -n "$LESSON_NUM" ] || { echo "ERROR: failed to allocate LESSON number — aborting before writing malformed lesson" >&2; exit 1; }
 ```
-If `~/.claude/.global-next-lesson` doesn't exist, create it by scanning all `.adlc/knowledge/lessons/` directories under the user's repos root for the highest `LESSON-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent directory of the current repo:
+If `~/.claude/.global-next-lesson` doesn't exist, create it by scanning all `.adlc/knowledge/lessons/` directories under the user's repos root for the highest `LESSON-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent of the **main checkout** (use `$ARTIFACT_ROOT`, not cwd):
 ```bash
-SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)}"
+SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$ARTIFACT_ROOT/.." && pwd)}"
 HIGHEST=$(find "$SCAN_ROOT" -path '*/.adlc/knowledge/lessons/LESSON-*' -type f 2>/dev/null \
   | grep -oE 'LESSON-[0-9]+' | sed 's/LESSON-//' | sort -n | tail -1)
 LESSON_NUM=$(( ${HIGHEST:-0} + 1 ))
@@ -239,9 +281,36 @@ echo $((LESSON_NUM + 1)) > ~/.claude/.global-next-lesson
 ```
 Lessons are `.md` files so the scan uses `-type f` (the `/spec` REQ-counter scan uses `-type d` because specs are directories — a deliberate sibling-substitution, do not "correct" to `-type d`). Use the counter ONLY thereafter — never re-scan after it exists. Note: the legacy per-repo `.adlc/.next-lesson` counter is **deprecated** and no longer consulted — existing files can be left in place but should not be read or written.
 
-Use the lesson template (`.adlc/templates/lesson-template.md`, fall back to `~/.claude/skills/templates/lesson-template.md`). Filename format is `LESSON-xxx-slug.md` only — no date prefixes, no bare-numeric prefixes. Include `domain`, `component`, and `tags` so future runs of `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance.
+Use the lesson template (`<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md`, fall back to `~/.claude/skills/templates/lesson-template.md`). Filename format is `LESSON-xxx-slug.md` only — no date prefixes, no bare-numeric prefixes. Include `domain`, `component`, and `tags` so future runs of `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance.
 
 If the bug genuinely produced no useful lesson (one-line typo, etc.), say so explicitly in the final summary — don't silently skip.
+
+**Step 4b — Persist bug-report status update + lesson to `main`.**
+
+The PRs were already merged in Step 1 of this Phase. Steps 3 and 4 wrote new content into `<ARTIFACT_ROOT>` (the primary repo's main checkout) but those edits are uncommitted. Land them as a **separate chore commit on `main`** — same model as `/wrapup`'s Step 4b:
+
+```bash
+git -C "$ARTIFACT_ROOT" status --short -- .adlc/bugs/ .adlc/knowledge/ \
+  | grep -qE '^\s*[?AM]' || { echo "bugfix: no bug-report or lesson edits to persist — skipping commit"; exit 0; }
+
+git -C "$ARTIFACT_ROOT" checkout main
+git -C "$ARTIFACT_ROOT" pull --ff-only origin main
+
+# Stage only the bug report and any new lesson — never blanket-add.
+git -C "$ARTIFACT_ROOT" add \
+  .adlc/bugs/BUG-xxx-slug.md \
+  .adlc/knowledge/lessons/LESSON-*.md 2>/dev/null || true
+
+git -C "$ARTIFACT_ROOT" diff --cached --quiet && {
+  echo "bugfix: nothing staged — skipping commit"
+  exit 0
+}
+
+git -C "$ARTIFACT_ROOT" commit -m "chore(BUG-xxx): mark resolved + capture lesson"
+git -C "$ARTIFACT_ROOT" push origin main
+```
+
+Substitute the concrete BUG id in the path glob and commit message. If branch protection blocks the push, surface to the user — they will need to land the chore via a small PR. Do **not** swallow the failure: the bug stays in `open` state in the repo's history if this commit doesn't land.
 
 **Step 5 — Clean up.**
 1. Switch the local checkout to main and pull: `git -C <main-worktree> checkout main && git -C <main-worktree> pull`
@@ -270,7 +339,7 @@ If the bug genuinely produced no useful lesson (one-line typo, etc.), say so exp
 - iOS: deployed to <list of ios.deploy_targets from config> (or "n/a — backend-only fix")
 
 ### Lessons captured
-- `.adlc/knowledge/lessons/LESSON-xxx-slug.md` — one-line hook
+- `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/LESSON-xxx-slug.md` — one-line hook
   (or "None — fix was straightforward and revealed no new pattern")
 ```
 

@@ -104,7 +104,7 @@ Do all the steps below **for every touched repo's PR**:
 A vague "Pipeline complete" claim without one of these tags is a protocol violation. When dispatched by `/sprint`, the orchestrator will reject untagged claims and treat them as `blocked`.
 
 **Topology-driven merge actor**:
-- **Single-repo REQ** (one touched repo): the pipeline owns the merge in this phase. Run `gh pr merge <prUrl> --squash --delete-branch` from the parent repo path (`repos[<id>].path`), NOT from the worktree. Terminal claim is `merged`.
+- **Single-repo REQ** (one touched repo): the pipeline owns the merge in this phase. Run `gh pr merge <prUrl> --squash --delete-branch` from the parent repo path (`repos[<id>].path`), NOT from the worktree. Then run the **wrapup-then-cleanup** block below. Terminal claim is `merged`.
 - **Cross-repo REQ** (multiple touched repos): use the cross-repo merge sequencing block below. Terminal claim is `merged` after all repos land, or `pr-ready` if dispatched by an orchestrator that owns merge sequencing.
 
 **Cross-repo merge sequencing**:
@@ -114,11 +114,26 @@ A vague "Pipeline complete" claim without one of these tags is a protocol violat
    - Merge that repo's PR (`gh pr merge <prUrl> --squash` or the project's configured merge strategy).
    - Wait for the merge to land, then set `repos[<id>].merged = true` in state.
    - If the next repo's PR was opened against `main` and depends on the just-merged changes being present, trigger a rebase/retarget before merging it. When siblings were developed in parallel worktrees against the same pre-REQ main, this is usually a no-op — but surface any auto-merge failure to the user as a conflict halt (legitimate halt #3).
-2. After all PRs are merged, run `/wrapup` with the REQ ID from the primary repo. In cross-repo mode, pass the list of touched repos so `/wrapup` can:
-   - Update ADLC artifacts (spec, decisions, knowledge) in the primary
-   - Trigger deploys for each deployable touched repo
-   - Emit a ship summary spanning all repos
-3. Remove the worktree in each touched repo using the absolute path from state: `git -C <repo-path> worktree remove <repos[<id>].worktree>`. Do NOT use the relative `.worktrees/REQ-xxx` form here.
+2. Proceed to the **wrapup-then-cleanup** block below.
+
+**Wrapup-then-cleanup** (single-repo and cross-repo both reach this block):
+
+The order here is **load-bearing**: `/wrapup` writes ADLC artifacts (lessons, assumptions, status updates) into the primary repo's main checkout. `git worktree remove` cannot run before `/wrapup`. Earlier revisions reversed this and lost every captured lesson when the worktree was torn down.
+
+1. **Run `/wrapup` with an explicit `--main-root`** so it doesn't have to re-derive `<ARTIFACT_ROOT>` from cwd:
+   ```
+   /wrapup REQ-xxx --main-root <repos[<primary-id>].path> [--touched-repos <id>,<id>,...]
+   ```
+   - `<primary-id>` is the entry in `repos` with `primary: true`.
+   - `<repos[<primary-id>].path>` is the absolute path to the primary repo's **main checkout** (NOT its worktree under `.worktrees/REQ-xxx/`). This value was frozen by Phase 0 step 8 and is the same across all phases of the run.
+   - In cross-repo mode also pass the comma-separated list of touched repo ids so `/wrapup` can emit the cross-repo ship summary and walk each sibling for deploy.
+   - `/wrapup` will: update spec/task statuses, append assumptions/lessons, run any Salesforce gates (Step 3a/3b), generate the ship summary, deploy via `/canary`, and (Step 4b) commit the ADLC artifact changes onto `main` in the primary repo as a separate `chore(REQ-xxx): capture knowledge ...` commit.
+2. **Verify `/wrapup` succeeded** before proceeding to cleanup. If it surfaced a Salesforce permset blocker or a deploy failure, STOP — do NOT remove the worktree. The user resolves the blocker and re-runs `/wrapup` (or `/canary` directly) before the pipeline can finish.
+3. **Now remove the worktree in each touched repo**, using the absolute path from state:
+   ```
+   git -C <repo-path> worktree remove <repos[<id>].worktree>
+   ```
+   Do NOT use the relative `.worktrees/REQ-xxx` form here. Removal is safe at this point: `/wrapup` Step 4b already committed the captured knowledge to the main checkout, which is a separate working tree.
 4. Update `pipeline-state.json` with `"completed": true`.
 5. The pipeline is now complete.
 

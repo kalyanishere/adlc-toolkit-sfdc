@@ -26,15 +26,48 @@ Target: $ARGUMENTS
 
 ## Prerequisites
 
-Before proceeding, verify that `.adlc/context/architecture.md` and `.adlc/context/conventions.md` exist. If any of these files are missing, stop and tell the user: "The `.adlc/` structure hasn't been initialized. Run `/init` first to set up the project context."
+Before proceeding, verify that `<ARTIFACT_ROOT>/.adlc/context/architecture.md` and `<ARTIFACT_ROOT>/.adlc/context/conventions.md` exist (after Step 0 has resolved `<ARTIFACT_ROOT>`). If any of these files are missing, stop and tell the user: "The `.adlc/` structure hasn't been initialized in the main checkout. Run `/init` first to set up the project context."
 
 ## Instructions
 
+### Step 0: Pin `<ARTIFACT_ROOT>` (do this FIRST)
+
+Every later step that writes under `.adlc/` (status updates, lessons, assumptions, conventions, architecture notes, the assume/lesson counters) MUST resolve its path against `<ARTIFACT_ROOT>` — the **absolute path of the primary repo's main checkout** — never against the current working directory. Otherwise, when `/wrapup` runs inside a feature worktree (the common case under `/proceed`) the writes land in the worktree and disappear when Step 2's `git worktree remove` runs.
+
+Resolve in this order, stopping at the first that succeeds:
+
+1. **From `pipeline-state.json`** (preferred under `/proceed`): if `<spec-dir>/pipeline-state.json` exists, read `repos[<primary-id>].path`. Pick the entry whose `primary` flag is true.
+2. **From an explicit caller arg**: if the invoker passed `--main-root <abs-path>` (e.g., `/proceed` Phase 8 in a future revision), use it verbatim.
+3. **Derived from `git worktree list`**: parse the worktree list and pick the worktree on `refs/heads/main` (or `master`):
+   ```bash
+   ARTIFACT_ROOT=$(git worktree list --porcelain | awk '
+     /^worktree /{p=$2}
+     /^branch refs\/heads\/(main|master)$/{print p; exit}
+   ')
+   ```
+4. **Fallback**: if none of the above produced a path AND `git rev-parse --abbrev-ref HEAD` reports `main` or `master`, use `git rev-parse --show-toplevel`. Otherwise stop with: "ERROR: cannot resolve `<ARTIFACT_ROOT>` — pass `--main-root` explicitly or run from the main checkout."
+
+Verify it:
+```bash
+git -C "$ARTIFACT_ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "ERROR: ARTIFACT_ROOT=$ARTIFACT_ROOT is not a git repo — aborting" >&2
+  exit 1
+}
+[ -d "$ARTIFACT_ROOT/.adlc" ] || {
+  echo "ERROR: $ARTIFACT_ROOT/.adlc missing — wrong checkout? Run /init there first." >&2
+  exit 1
+}
+```
+
+Substitute the resolved value everywhere later steps reference `<ARTIFACT_ROOT>`. Treat it as **immutable** for the rest of the run — once frozen, never re-derive (the worktree may be removed mid-run).
+
+In cross-repo mode you will resolve a `<ARTIFACT_ROOT>` per touched repo using the same rules — `repos[<id>].path` from `pipeline-state.json` is the canonical source. The PRIMARY repo's `<ARTIFACT_ROOT>` is the one used for ADLC spec/knowledge writes (specs and knowledge always live in the primary). Sibling-repo `<ARTIFACT_ROOT>` values are only needed when sibling-specific artifacts (e.g., `Permissions.md` in a Salesforce sibling — Step 3a) need to land on that sibling's main checkout.
+
 ### Step 1: Identify the Feature
-1. If given a REQ ID, locate all artifacts under `.adlc/specs/REQ-xxx-*/`
+1. If given a REQ ID, locate all artifacts under `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/`
 2. If no REQ ID given, infer from the current branch name or recent merge commits
 3. Read the requirement spec, architecture doc, and all task files
-4. **Detect repository mode** — read `.adlc/config.yml` in the primary repo. If it declares more than one entry under `repos:`, this is **cross-repo mode**; otherwise **single-repo mode**. In cross-repo mode also read `pipeline-state.json` from the spec directory — it holds the per-repo branch/worktree/PR/merge state.
+4. **Detect repository mode** — read `<ARTIFACT_ROOT>/.adlc/config.yml` in the primary repo. If it declares more than one entry under `repos:`, this is **cross-repo mode**; otherwise **single-repo mode**. In cross-repo mode also read `pipeline-state.json` from the spec directory — it holds the per-repo branch/worktree/PR/merge state.
 
 ### Step 2: Commit, Push, and Merge
 
@@ -75,11 +108,14 @@ Before proceeding, verify that `.adlc/context/architecture.md` and `.adlc/contex
 **Cross-repo aggregate log**: after walking every touched repo, emit a one-line summary per repo: `<repo-id>: merged <prUrl>, worktree cleaned` or `<repo-id>: already merged (from /proceed Phase 8)`.
 
 ### Step 3: Update ADLC Artifact Statuses
-1. Set the requirement's frontmatter status to `complete`
-2. Set all task statuses to `complete`
+
+**All file paths in this step resolve under `<ARTIFACT_ROOT>/.adlc/...` — never against cwd.** The work-tree may already have been removed by Step 2.12 by the time `/proceed` invokes Phase 8 wrapup.
+
+1. Set the requirement's frontmatter status to `complete` in `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/requirement.md`
+2. Set all task statuses to `complete` in `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/tasks/*.md`
 3. Update the `updated` date on all modified artifacts to today's date
 4. If any tasks were deferred or descoped, note them in the requirement file under a "Deferred" section
-5. If `pipeline-state.json` exists in the spec directory, update it: set `"completed": true` and add a final entry to `phaseHistory`
+5. If `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/pipeline-state.json` exists, update it: set `"completed": true` and add a final entry to `phaseHistory`
 
 ### Step 3a: Salesforce — Permissions.md gate
 
@@ -146,19 +182,20 @@ If any check fails, surface as a wrapup blocker. The corrective action is a forw
 Evaluate whether any decisions, patterns, or lessons should be persisted:
 
 #### Architectural Decisions
-- Were any new patterns introduced? If so, propose an update to `.adlc/context/architecture.md`
+- Were any new patterns introduced? If so, propose an update to `<ARTIFACT_ROOT>/.adlc/context/architecture.md`
 - Were any existing patterns modified or deprecated?
 
 #### Assumptions Validated or Invalidated
 - Review assumptions from the requirement spec
-- Log any that were validated, invalidated, or still unresolved to `.adlc/knowledge/assumptions/`
-- Use the assumption template (check `.adlc/templates/assumption-template.md` first, fall back to `~/.claude/skills/templates/assumption-template.md`)
-- Name files: `ASSUME-xxx-slug.md`. Determine the next ID using the atomic counter at `.adlc/.next-assume` (LESSON-110), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014) so concurrent `/sprint` wrapups can't lose updates and a swapped-in symlink can't redirect the counter:
+- Log any that were validated, invalidated, or still unresolved to `<ARTIFACT_ROOT>/.adlc/knowledge/assumptions/` (NEVER `./...` — cwd may be a worktree that's about to be removed)
+- Use the assumption template (check `<ARTIFACT_ROOT>/.adlc/templates/assumption-template.md` first, fall back to `~/.claude/skills/templates/assumption-template.md`)
+- Name files: `ASSUME-xxx-slug.md`. Determine the next ID using the atomic counter at `<ARTIFACT_ROOT>/.adlc/.next-assume` (LESSON-110), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014) so concurrent `/sprint` wrapups can't lose updates and a swapped-in symlink can't redirect the counter. **The counter and its lock live under the main checkout — not the worktree** (otherwise concurrent worktrees each see their own counter and collide):
   ```bash
+  # ARTIFACT_ROOT was pinned in Step 0 — pass through, never re-derive.
   ASSUME_NUM=$(
-    REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git worktree" >&2; exit 1; }
-    LOCK="$REPO_ROOT/.adlc/.next-assume.lock.d"
-    COUNTER="$REPO_ROOT/.adlc/.next-assume"
+    [ -n "$ARTIFACT_ROOT" ] || { echo "ERROR: ARTIFACT_ROOT not set — Step 0 must run first" >&2; exit 1; }
+    LOCK="$ARTIFACT_ROOT/.adlc/.next-assume.lock.d"
+    COUNTER="$ARTIFACT_ROOT/.adlc/.next-assume"
     if [ -L "$LOCK" ]; then
       echo "ERROR: $LOCK is a symlink — refusing (TOCTOU risk). Inspect manually." >&2
       exit 1
@@ -183,8 +220,8 @@ Claude drafts the lesson directly from in-context conversation memory. Consider:
   - Any surprises during implementation?
   - Approaches that didn't work and why?
   - Things that worked particularly well?
-- Log notable lessons to `.adlc/knowledge/lessons/` if they'd help future work
-- Use the lesson template (check `.adlc/templates/lesson-template.md` first, fall back to `~/.claude/skills/templates/lesson-template.md`)
+- Log notable lessons to `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/` if they'd help future work (NEVER `./.adlc/knowledge/lessons/` — cwd may be a worktree that's about to be removed)
+- Use the lesson template (check `<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md` first, fall back to `~/.claude/skills/templates/lesson-template.md`)
 - **Filename format is `LESSON-xxx-slug.md`** (e.g., `LESSON-041-signed-url-ttl-mismatch.md`). This is the ONLY permitted naming scheme — do not use date-prefixed names (`2026-MM-DD-…md`) or bare numeric prefixes (`034-…md`). Slugs are lowercase kebab-case, ≤6 words.
 - **Allocate the next ID atomically via the global `~/.claude/.global-next-lesson` counter** (shared across all repos for unique IDs, mirroring the REQ/BUG counters — see LESSON-004; directory scans also race against concurrent `/sprint` pipelines — LESSON-110), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014). The lock path `~/.claude/.global-next-lesson.lock.d` is shared with `/bugfix` so concurrent `/wrapup` and `/bugfix` runs mutually exclude:
   ```bash
@@ -214,9 +251,9 @@ Claude drafts the lesson directly from in-context conversation memory. Consider:
   # would be silently empty. Guard the parent context (REQ-416 verify D-pass).
   [ -n "$LESSON_NUM" ] || { echo "ERROR: failed to allocate LESSON number — aborting before writing malformed lesson" >&2; exit 1; }
   ```
-  If `~/.claude/.global-next-lesson` doesn't exist, create it by scanning all `.adlc/knowledge/lessons/` directories under the user's repos root for the highest `LESSON-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent directory of the current repo:
+  If `~/.claude/.global-next-lesson` doesn't exist, create it by scanning all `.adlc/knowledge/lessons/` directories under the user's repos root for the highest `LESSON-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent of the **main checkout** (use `$ARTIFACT_ROOT`, not cwd — a worktree's parent points at `.worktrees/` and silently misses every actual repo):
   ```bash
-  SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)}"
+  SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$ARTIFACT_ROOT/.." && pwd)}"
   HIGHEST=$(find "$SCAN_ROOT" -path '*/.adlc/knowledge/lessons/LESSON-*' -type f 2>/dev/null \
     | grep -oE 'LESSON-[0-9]+' | sed 's/LESSON-//' | sort -n | tail -1)
   LESSON_NUM=$(( ${HIGHEST:-0} + 1 ))
@@ -227,8 +264,55 @@ Claude drafts the lesson directly from in-context conversation memory. Consider:
 - Include `domain`, `component`, and `tags` so that `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance. The `component` field should be more specific than `domain` (e.g., `domain: API`, `component: API/auth` or `domain: iOS`, `component: iOS/SwiftUI`)
 
 #### Convention Updates
-- Were any new conventions established? Propose updates to `.adlc/context/conventions.md`
+- Were any new conventions established? Propose updates to `<ARTIFACT_ROOT>/.adlc/context/conventions.md`
 - Were any existing conventions found to be problematic?
+
+### Step 4b: Persist Knowledge to `main`
+
+The Phase 2 squash-merge already shipped the feature commits to `main`. Step 4 just wrote new artifacts (lessons, assumptions, status updates, conventions) into `<ARTIFACT_ROOT>` — the **main checkout**, NOT the now-deleted feature worktree. Those files are uncommitted local changes on `main` and will sit there forever unless this step lands them.
+
+This step is intentionally a **separate commit on `main`** (not part of the feature PR) because:
+- The feature PR is already merged — there is no PR to amend.
+- These artifacts capture knowledge **about** the merged change; they are not part of the change itself.
+- A standalone commit makes the captured knowledge attributable and revertible without disturbing the feature commit.
+
+Run inside `<ARTIFACT_ROOT>`:
+
+```bash
+git -C "$ARTIFACT_ROOT" status --short -- .adlc/ \
+  | grep -qE '^\s*[?AM]' || { echo "wrapup: no knowledge artifacts to persist — skipping commit"; exit 0; }
+
+# Pull first in case main moved while the feature was being merged.
+git -C "$ARTIFACT_ROOT" checkout main
+git -C "$ARTIFACT_ROOT" pull --ff-only origin main
+
+# Stage only ADLC artifacts — never blanket-add (LESSON-110: don't sweep up
+# stray files an interrupted earlier run may have left in the main checkout).
+git -C "$ARTIFACT_ROOT" add \
+  .adlc/specs/REQ-xxx-*/requirement.md \
+  .adlc/specs/REQ-xxx-*/tasks/*.md \
+  .adlc/specs/REQ-xxx-*/pipeline-state.json \
+  .adlc/knowledge/lessons/LESSON-*.md \
+  .adlc/knowledge/assumptions/ASSUME-*.md \
+  .adlc/context/architecture.md \
+  .adlc/context/conventions.md 2>/dev/null || true
+
+# Bail cleanly if nothing was actually staged (all globs missed).
+git -C "$ARTIFACT_ROOT" diff --cached --quiet && {
+  echo "wrapup: nothing staged — skipping commit"
+  exit 0
+}
+
+git -C "$ARTIFACT_ROOT" commit -m "chore(REQ-xxx): capture knowledge from completed feature
+
+- requirement + tasks → status: complete
+- new lessons / assumptions / convention updates from /wrapup
+" || { echo "ERROR: knowledge commit failed — surface to user, do not retry blindly" >&2; exit 1; }
+
+git -C "$ARTIFACT_ROOT" push origin main
+```
+
+Substitute the concrete REQ id for `REQ-xxx`. If `git push` is blocked by branch protection on `main`, surface that to the user — they will need to land the chore commit via a small PR (`chore/req-xxx-knowledge-capture` branch). Do **not** silently swallow a push failure: if knowledge isn't persisted upstream, the next `/wrapup` may re-allocate the same LESSON id from a stale counter view.
 
 ### Step 5: Generate Ship Summary
 Create a concise summary suitable for sharing with the team. In cross-repo mode, list each repo/PR under a Repos section.
