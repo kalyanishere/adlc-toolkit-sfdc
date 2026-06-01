@@ -72,6 +72,7 @@ Before proceeding, verify that `.adlc/context/architecture.md` and `.adlc/contex
    - **Dependencies**: Other tasks that must complete first — dependencies may cross repos (a frontend task can depend on a backend task)
 6. Tasks must form a valid dependency graph (no cycles), even when spanning repos
 7. Order tasks so foundational work comes first (data layer → service → routes → UI). In cross-repo mode, backend/API tasks typically precede their frontend consumers.
+8. **UI test obligation** — for any task that touches a user-facing surface (`force-app/**/lwc/**`, FlexiPages, Lightning Apps, Experience Cloud sites, OmniScripts, Flow screens, custom tabs, or Agentforce conversation UI), the task MUST list a Playwright spec under `tests/e2e/<feature>.spec.ts` in **Files to Create/Modify** and include an acceptance criterion of the form "Playwright spec `tests/e2e/<feature>.spec.ts` passes against `orgs.sandbox`". LWC Jest unit tests remain required separately — Playwright covers cross-component flows (login → navigate → interact → assert), Jest covers the component in isolation. If `.adlc/config.yml` does not declare `playwright_specs:`, note in Technical Notes that Playwright wiring needs to be added before this task can run; otherwise reference the configured directory.
 
 ### Step 5: Update Requirement Status
 1. Update the requirement's frontmatter status from `draft` to `approved`
@@ -89,5 +90,6 @@ Before proceeding, verify that `.adlc/context/architecture.md` and `.adlc/contex
 - [ ] Task dependencies form a valid DAG (no cycles), including cross-repo edges
 - [ ] Every file to be modified is listed in at least one task
 - [ ] Tests are included in task acceptance criteria
+- [ ] Every UI-bearing task lists a Playwright spec in Files to Create/Modify and an acceptance criterion that runs it
 - [ ] No task has more than 3 dependencies
 - [ ] In cross-repo mode: every task has a `repo:` field naming a valid repo id from `.adlc/config.yml`, and all files in that task live in that repo

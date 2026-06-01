@@ -47,6 +47,7 @@ orgs:
   prod:    "<prod-alias>"
 
 agentforce_test_specs: "force-app/main/default/agentTests"   # optional
+playwright_specs: "tests/e2e"                                 # optional — directory of Playwright UI specs
 ```
 
 Resolve the target alias for `$ARGUMENTS`. If absent in the config, halt with a clear message naming the missing key.
@@ -119,6 +120,32 @@ For each spec under `<agentforce_test_specs>/`, invoke the spec, capture pass/fa
 
 If Agentforce is NOT in scope, skip this step silently. Do not emit a "skipped" line — that's noise.
 
+### Step 4b: Playwright UI smoke gate (only when in scope)
+
+When `.adlc/config.yml` declares `playwright_specs:` AND that directory contains at least one `*.spec.ts`/`*.spec.js`, run Playwright as a real-browser smoke against the just-deployed org. This catches regressions that a server-side Apex test cannot — broken FlexiPage layouts, LWC bundles that fail to load, OmniScript steps that no longer render, login-flow drift.
+
+```sh
+# Resolve org credentials → storageState (one-time per run)
+ORG_URL=$(sf org display --target-org "$ALIAS" --json | jq -r '.result.instanceUrl')
+ORG_USER=$(sf org display --target-org "$ALIAS" --json | jq -r '.result.username')
+sf org open --target-org "$ALIAS" --url-only --json > "reports/playwright/$ENV/login-url.json"
+
+# Run the suite against this environment
+PLAYWRIGHT_BASE_URL="$ORG_URL" \
+PLAYWRIGHT_LOGIN_URL_FILE="reports/playwright/$ENV/login-url.json" \
+npx playwright test \
+  --config "$(grep '^playwright_specs:' .adlc/config.yml | awk '{print $2}' | tr -d '"' | xargs dirname)/../playwright.config.ts" \
+  --project="$ENV" \
+  --reporter=json \
+  --output "reports/playwright/$ENV"
+```
+
+Roll up pass/fail. On any spec failure, **STOP** — surface the failing spec name, the screenshot/trace path written under `reports/playwright/$ENV/`, and recommend a forward-fix. Do NOT auto-promote to the next environment.
+
+If `playwright_specs:` is absent OR the directory is empty, skip this step silently. Production projects that rely solely on Apex/Jest coverage are still supported.
+
+`prod` policy: never run Playwright specs that mutate org state against the prod alias. Specs marked `@prod-safe` (read-only smoke: load page, assert selector, log out) MAY run; everything else is filtered out via `--grep "@prod-safe"` when `$ENV == prod`. Specs that don't carry the tag are skipped with a one-line note in the report.
+
 ### Step 5: Verify
 
 After deploy + smoke gate, run a final verification:
@@ -175,6 +202,14 @@ Org: <username> (<instance URL>)
 - Fail: 0
 - Result: ✓ clean
 
+### Playwright UI smoke (if in scope)
+- Specs run: NNN
+- Pass: NNN
+- Fail: 0
+- Skipped (not @prod-safe): NNN  (only on prod runs)
+- Trace artifacts: reports/playwright/<env>/
+- Result: ✓ clean
+
 ### Verification
 - Apex coverage: 78.4% (≥ 75% ✓)
 - Final org status: <status>
@@ -187,6 +222,7 @@ Next step: <auto-promoted to staging | run `/canary prod` | halted because of <r
 - **Validate fails**: stop. Surface the deployment errors verbatim. Do NOT attempt the deploy.
 - **Deploy fails after validate succeeded**: rare (validate is server-side). Surface the failure; the corrective action is a forward-fix deploy, not a rollback.
 - **Agentforce smoke fails**: stop before promoting further. Recommend investigation; do NOT auto-fix.
+- **Playwright smoke fails**: stop before promoting further. Surface the failing spec, the path to the trace/video under `reports/playwright/$ENV/`, and the assertion message. Do NOT auto-fix; UI failures usually need the trace viewer (`npx playwright show-trace`) to diagnose.
 - **Coverage drops below 75%**: surface as a Major finding; do NOT block promotion automatically (production policy may differ — let the user decide).
 
 ## What This Skill Does NOT Do
