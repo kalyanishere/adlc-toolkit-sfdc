@@ -1,23 +1,13 @@
-# .adlc/config.yml — ADLC project configuration
+# .adlc/config.yml — ADLC Salesforce project configuration
 #
-# This file lives in every repo that originates REQs. "Primary" is per-REQ,
-# not a fixed designation: whichever repo you invoke /proceed from becomes
-# the primary for that REQ, so every repo that can host REQs needs its own
-# `.adlc/` (from /init) and its own config.yml.
+# This file lives in every Salesforce repo that originates REQs. "Primary" is
+# per-REQ, not a fixed designation: whichever repo you invoke /proceed from
+# becomes the primary for that REQ, so every repo that can host REQs needs its
+# own `.adlc/` (from /init) and its own config.yml.
 #
-# The config in THIS repo describes the world from this repo's perspective:
-# this repo is primary, the others are siblings. The sibling repos that also
-# originate REQs will have their own config.yml files that mirror this —
-# they'll mark themselves primary and list this one as a sibling. That's
-# expected; the configs are symmetric by design.
-#
-# A repo that only ever participates as a sibling (never originates REQs)
-# doesn't strictly need a config, but it's cheap insurance to set one up
-# anyway so it can host a REQ later.
-#
-# Single-repo projects can leave this file absent OR include only a single
-# entry under `repos:`. All ADLC skills fall back to legacy single-repo
-# behavior in that case.
+# Single-repo SF projects (the common case — one DX project) can leave the
+# `repos:` block with a single entry. All ADLC skills fall back to legacy
+# single-repo behavior when only one entry is declared.
 #
 # ---------------------------------------------------------------------------
 # QUICKSTART: copy a preset
@@ -25,47 +15,75 @@
 # The fastest way to fill this in is to start from a preset that matches your
 # stack, then replace the placeholder values.
 #
-#   cp ~/.claude/skills/presets/ios-firebase-cloudrun.yml .adlc/config.yml
+#   cp ~/.claude/skills/presets/sfdc-core.yml .adlc/config.yml
 #
 # Available presets (see ~/.claude/skills/presets/):
-#   - ios-firebase-cloudrun.yml — iOS app + Firebase + Cloud Run backend
+#   - sfdc-core.yml        — Apex + LWC + Flow + SOQL + Permissions + Deploy
+#   - sfdc-industries.yml  — sfdc-core + Data Cloud, Agentforce, OmniStudio,
+#                            Industries CME EPC, Vlocity build/deploy
 #
 # If no preset matches, fill out the sections below from scratch.
 
 # ---------------------------------------------------------------------------
 # project: Display name and (optional) preset reference.
 # ---------------------------------------------------------------------------
-# `name` is shown in skill output and PR/commit metadata. It's the only place
-# the project's human name appears — every skill reads it from here.
+# `name` is shown in skill output and PR/commit metadata.
 # `preset` is informational only: it records which preset (if any) this config
 # was seeded from. Skills don't read it; it's a hint for `/template-drift`.
 
 project:
-  name: "My Project"
-  # preset: ios-firebase-cloudrun
+  name: "My Salesforce Project"
+  # preset: sfdc-core
+
+# ---------------------------------------------------------------------------
+# salesforce: Salesforce-specific identity and policy values.
+# ---------------------------------------------------------------------------
+# These are the values salesforce-rules.md depends on at runtime. Skills read
+# them when generating Apex, permission sets, deploy commands, etc.
+#
+#   app_prefix         — 3–8 character PascalCase identifier used in permission
+#                        set naming: [AppPrefix]_[Component]_[AccessLevel].
+#                        Example: SalesApp -> SalesApp_Opportunity_Read
+#   api_version        — Salesforce API version floor. salesforce-rules.md
+#                        mandates 66.0+ for any Agentforce/AI metadata.
+#   org_alias          — Default sf CLI alias (sf org list). Skills will
+#                        target this org for sf data, sf agent, sf data360
+#                        invocations unless overridden.
+#   package_directories — Repo-relative paths that hold metadata. Mirrors
+#                        sfdx-project.json's packageDirectories; used by
+#                        /architect to scope the change set.
+#   agentforce_variant — Employee | Service. Determines deploy gate, persona
+#                        shape, and whether a dedicated Einstein Agent User +
+#                        system permission set is required. Omit when
+#                        Agentforce is not in scope.
+#   industries         — Opt-in flags for advanced surface areas. Skills
+#                        branch on this to wire (or skip) the relevant
+#                        sf-skills rubrics.
+
+salesforce:
+  app_prefix: "<AppPrefix>"          # 3–8 chars, PascalCase
+  api_version: "66.0"                # 66.0+ required for Agentforce
+  org_alias: "<org-alias>"           # default sf CLI org alias
+  package_directories:
+    - "force-app"
+  agentforce_variant: ""             # "Employee" | "Service" | "" (not used)
+  industries: []                     # any subset of: [datacloud, agentforce, omnistudio, cme]
 
 # ---------------------------------------------------------------------------
 # stack: Tech stack declaration. Drives conditional skill behavior.
 # ---------------------------------------------------------------------------
-# Skills consult these lists before running stack-specific steps. For example,
-# `/bugfix` and `/wrapup` only emit iOS deploy instructions when `frontends`
-# includes `ios`. `/canary` only runs when `backends` includes `cloud-run`.
-#
-# Keep these lists honest — listing a platform you don't actually use will
-# produce noisy output; omitting one will skip steps you actually need.
-#
-# Recognized values (extend by editing the relevant skill):
-#   languages:  swift | typescript | javascript | python | go | rust | kotlin | java
-#   frontends:  ios | android | web | mobile-rn | mobile-flutter
-#   backends:   cloud-run | aws-lambda | k8s | nodejs-server | django | rails | none
-#   databases:  firestore | postgres | mysql | dynamodb | mongodb | sqlite | none
-#   ci:         github-actions | gitlab-ci | circleci | none
+# Recognized values:
+#   languages:  apex | javascript | typescript
+#   frontends:  lwc | aura
+#   backends:   salesforce-platform | external-rest
+#   databases:  salesforce-soql | datacloud
+#   ci:         github-actions | gitlab-ci | circleci | jenkins | none
 
 stack:
-  languages: []
-  frontends: []
-  backends: []
-  databases: []
+  languages: [apex, javascript]
+  frontends: [lwc]
+  backends: [salesforce-platform]
+  databases: [salesforce-soql]
   ci: github-actions
 
 # ---------------------------------------------------------------------------
@@ -74,78 +92,39 @@ stack:
 # The key is a short stable id (used in task frontmatter as `repo: <id>`).
 # The entry for THIS repo has `primary: true` and no `path` (path is implicit).
 # Sibling entries declare a `path:` relative to this repo's root (or absolute).
-# Every sibling must be cloned locally at that path.
 
 repos:
-  # Example: primary is the web frontend
-  web:
+  # The common SF case: a single DX project repo.
+  sfdc:
     primary: true
-  # Example: siblings
-  api:
-    path: ../api
-  mobile:
-    path: ../mobile
+  # Example sibling (an external integration repo, e.g. MuleSoft, Heroku app)
+  # integration:
+  #   path: ../integration
 
 # ---------------------------------------------------------------------------
-# merge_order: Order Phase 8 merges PRs.
+# merge_order: Order Phase 8 merges PRs across touched repos.
 # ---------------------------------------------------------------------------
-# List touched repo ids in the order they should merge. Typical pattern:
-# data/backend first, then the services that consume them.
-# If omitted, /proceed uses the order repos appear under `repos:` above.
+# List touched repo ids in the order they should merge. For a single-repo SF
+# project this is just [sfdc]. If you have a sibling integration repo, merge
+# the contract-providing repo first.
 
 merge_order:
-  - api
-  - web
-  - mobile
+  - sfdc
 
 # ---------------------------------------------------------------------------
-# gcp: GCP-specific deploy config. Only relevant if `stack.backends` includes
-# `cloud-run` or your CI/CD targets GCP.
+# orgs: sf CLI deploy targets for /canary and /wrapup.
 # ---------------------------------------------------------------------------
-# `staging_project` and `production_project` are the GCP project IDs that
-# `/bugfix` and `/wrapup` query to confirm a deploy succeeded.
-# `default_region` is used by `/canary` and the deploy-confirmation gcloud
-# commands when a service entry doesn't specify its own region.
+# Maps an environment label to an sf CLI org alias. /canary promotes a change
+# along this list (sandbox -> staging -> prod), running `sf project deploy
+# validate` then `sf project deploy start`. The "prod" entry is gated by an
+# ask-prompt in .claude/settings.json; never auto-approved.
 #
-# If you don't deploy to GCP, omit this whole section.
+# `agentforce_test_specs` is the path to your sf agent test specs (used by
+# /canary's Agentforce smoke gate). Omit when Agentforce is not in scope.
 
-gcp:
-  staging_project: <staging-gcp-project-id>
-  production_project: <production-gcp-project-id>
-  default_region: us-central1
+orgs:
+  sandbox: "<sandbox-alias>"
+  staging: "<staging-alias>"
+  prod:    "<prod-alias>"
 
-# ---------------------------------------------------------------------------
-# ios: iOS-specific deploy config. Only relevant if `stack.frontends`
-# includes `ios`.
-# ---------------------------------------------------------------------------
-# `deploy_targets` is the list of WiFi-paired devices (or simulators) that
-# `/bugfix` and `/wrapup` deploy to after merge. Listing more than one means
-# every device gets the build — drop devices you don't need to keep current.
-# `derived_data_clean: true` runs `rm -rf ~/Library/Developer/Xcode/DerivedData/*`
-# before each deploy (recommended — avoids stale-build issues).
-# `deploy_command` is the script the skill invokes from the iOS repo root.
-#
-# If you don't ship iOS, omit this whole section.
-
-ios:
-  deploy_targets: []
-  derived_data_clean: true
-  deploy_command: "./deploy.sh"
-
-# ---------------------------------------------------------------------------
-# services: Cloud Run / deploy config keyed by repo id.
-# ---------------------------------------------------------------------------
-# Consumed by /canary. Repos without a `services:` entry are treated as
-# non-deployable (e.g., docs-only, iOS, infrastructure-only repos).
-# Repos that deploy via a different mechanism (TestFlight, custom script)
-# can be omitted here and handled in /wrapup Step 6.
-
-services:
-  api:
-    cloud_run_service: api
-    region: us-central1
-    image_path: us-central1-docker.pkg.dev/<gcp-project>/api/api
-  web:
-    cloud_run_service: web
-    region: us-central1
-    image_path: us-central1-docker.pkg.dev/<gcp-project>/web/web
+agentforce_test_specs: ""           # e.g., "force-app/main/default/agentTests"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SKILL.md corruption linter — five orthogonal checks (REQ-425, REQ-433, REQ-436).
+"""SKILL.md corruption + agent-policy linter — six orthogonal checks.
 
 Run from the repo root:
 
@@ -7,37 +7,19 @@ Run from the repo root:
 
 Exit code: 0 on clean, otherwise min(num_findings, 255).
 
-The five checks (each a pure ``(text, rel) -> list[Finding]`` except
-``find_skill_files``, the one structural exception):
+The six checks (each a pure ``(text, rel) -> list[Finding]`` except
+``find_skill_files`` / ``find_agent_files``, the structural file finders):
 
 1. ``check_sentinels``   — exact forbidden substrings from ``sentinels.txt``.
 2. ``check_balance``     — ``$(``/``)`` and ``$((``/``))`` imbalance per fence.
-3. ``check_canonical``   — the Kimi-delegation canonical literals must be
-   present whenever a SKILL.md mentions ``ADLC_DISABLE_KIMI``. **Canonical
-   follows the indirection (REQ-436 ADR-4):** a literal is satisfied if it is
-   in the SKILL.md text *or* in the text of a sourced telemetry partial
-   resolved under the scan root (``<root>/partials/*.sh`` then
-   ``<root>/.adlc/partials/*.sh``). REQ-436 relocated the
-   ``_adlc_emit_step_telemetry`` helper body — and with it canonical literals
-   L2/L3 — out of ``analyze/SKILL.md`` into ``partials/emit-step-telemetry.sh``;
-   a literal-presence guard rots when the thing it guards moves behind
-   indirection (LESSON-019 #1), so the guard is generalized in the same change
-   rather than hard-coding the one partial. Substring match only — no shell
-   parsing (LESSON-016: keep the linter deliberately simple).
-4. ``check_posix_fence`` — ``local`` declarations inside a ``sh``/``shell``
-   fence. **``bash`` fences are exempt by design (REQ-436 ADR-6):** many
-   ``bash`` builds support ``local``; conventions.md's POSIX-only mandate
-   targets ``sh``/``shell``, so flagging ``bash`` would be a false positive in
-   legitimately-``bash`` blocks. Catches the Defect-2 class going forward.
-5. ``check_cross_fence_fn`` — a shell function defined in one fenced block but
-   invoked only from a *different* fenced block in the same SKILL.md. SKILL.md
-   fenced blocks do not share shell state across steps, so such a function is
-   undefined at its call site (the Defect-1 silent-telemetry-loss class). This
-   is the structural guard that prevents Defect-1 from regressing
-   (LESSON-012: structural enforcement beats prose; LESSON-019 applied to the
-   linter itself). Conservative: only names that are both *defined* with the
-   ``() {`` form and *invoked* at statement position within fences are
-   considered; prose mentions outside fences are ignored.
+3. ``check_posix_fence`` — ``local`` declaration inside an ``sh``/``shell`` fence.
+4. ``check_cross_fence_fn`` — function defined in one fenced block but invoked
+   only from a different fenced block in the same SKILL.md.
+5. ``check_model_policy`` — under ``agents/*.md``, frontmatter ``model:``
+   MUST be ``sonnet`` or ``opus``. ``haiku``/``TBD``/third-party models are
+   policy violations per ``MODEL_ASSIGNMENTS.md``.
+6. ``check_sf_checklist_source`` — advisory. A SKILL.md mentioning Salesforce
+   artifacts but not sourcing ``partials/sf-quality-checklist.md`` is flagged.
 
 ``find_skill_files`` root-skip fix (REQ-436 ADR-5, executes REQ-433 ADR-3b's
 deferred follow-up; LESSON-019 #2): the ``SKIP_DIR_PARTS`` membership test is
@@ -61,22 +43,25 @@ SENTINELS_FILE = SCRIPT_DIR / "sentinels.txt"
 
 SKIP_DIR_PARTS = {".git", ".worktrees", "node_modules"}
 
-KIMI_GATE_ANCHOR = "ADLC_DISABLE_KIMI"
-CANONICAL_LITERALS = (
-    "start_s=$(date -u +%s)",
-    "duration_ms=$(( ($(date -u +%s) - $start_s) * 1000 ))",
-    '"$KIMI_TOOLS"/emit-telemetry.sh ',
-    ". .adlc/partials/kimi-gate.sh 2>/dev/null || . ~/.claude/skills/partials/kimi-gate.sh",
-    ". .adlc/partials/kimi-tools-path.sh 2>/dev/null || . ~/.claude/skills/partials/kimi-tools-path.sh",
-)
+# Permitted model values in any agent's `model:` frontmatter. Anything else
+# (haiku, kimi-k2.5, gpt-4, claude-3-5-sonnet, the literal placeholder TBD,
+# etc.) is a project policy violation. Source: MODEL_ASSIGNMENTS.md.
+ALLOWED_MODELS = frozenset({"sonnet", "opus"})
 
-# REQ-436 Phase-5 security hardening: the partial-aware canonical rule (ADR-4)
-# may only *rescue* a literal that moved behind indirection when the SKILL.md
-# under test actually sources the telemetry partial. Without this gate an
-# unrelated partial elsewhere in the repo would let a SKILL.md that omitted all
-# telemetry wiring pass clean — re-rotting the very guard ADR-4 keeps alive
-# (LESSON-019 #1).
-TELEMETRY_PARTIAL_MARKER = "partials/emit-step-telemetry.sh"
+# SF-artifact triggers — a SKILL.md whose body mentions one of these globs is
+# probably operating on Salesforce code and should source the quality checklist.
+# Used by check_sf_checklist_source as an advisory hint, not as a hard gate.
+SF_ARTIFACT_HINTS = (
+    "*.cls",
+    "*.trigger",
+    "*.flow-meta.xml",
+    "*.permissionset-meta.xml",
+    "force-app/",
+    "skills/sf/",
+    "salesforce-rules.md",
+    "sf-quality-checklist",
+)
+SF_CHECKLIST_SOURCE_MARKER = "partials/sf-quality-checklist.md"
 
 FENCE_OPEN_RE = re.compile(r"^\s*```(sh|bash|shell)\b")
 FENCE_CLOSE_RE = re.compile(r"^\s*```\s*$")
@@ -228,76 +213,6 @@ def check_balance(text: str, rel: str) -> list[Finding]:
     return findings
 
 
-def load_partials_blob(root: Path) -> str:
-    """Concatenated text of every sourced telemetry partial under ``root``.
-
-    REQ-436 ADR-4: canonical literals L2/L3 legitimately live in
-    ``partials/emit-step-telemetry.sh`` after REQ-436 relocated the
-    ``_adlc_emit_step_telemetry`` helper body out of ``analyze/SKILL.md``. A
-    canonical literal is satisfied if present in the SKILL.md text **or** in
-    any of these partials. Resolution order mirrors the two layouts the
-    resolver-source lines themselves use:
-
-      * ``<root>/partials/*.sh``        — toolkit-self / dogfooding layout
-      * ``<root>/.adlc/partials/*.sh``  — consumer-project layout
-
-    Read once per ``run()`` and threaded into ``check_canonical`` (never
-    re-read per SKILL.md). Substring match only — no shell parsing
-    (LESSON-016: keep the linter deliberately simple). The same
-    symlink-escape philosophy as ``find_skill_files`` is applied: a partial
-    whose real path resolves outside the scan root is ignored, so a symlinked
-    partials dir cannot smuggle satisfaction in from outside the tree.
-    """
-    root_resolved = root.resolve()
-    blobs: list[str] = []
-    for sub in ("partials", ".adlc/partials"):
-        pdir = root / sub
-        try:
-            if not pdir.is_dir():
-                continue
-            # Directory-level symlink-escape guard (LESSON-014/019): a
-            # `partials/` that is itself a symlink pointing out of the tree
-            # must not even be enumerated (filename side-channel), mirroring
-            # the per-file guard below.
-            pdir.resolve().relative_to(root_resolved)
-        except (OSError, ValueError):
-            continue
-        for sh in sorted(pdir.glob("*.sh")):
-            try:
-                resolved = sh.resolve()
-                resolved.relative_to(root_resolved)
-            except (OSError, ValueError):
-                continue
-            try:
-                blobs.append(sh.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                continue
-    return "\n".join(blobs)
-
-
-def check_canonical(text: str, rel: str, partials_blob: str = "") -> list[Finding]:
-    if KIMI_GATE_ANCHOR not in text:
-        return []
-    # REQ-436 Phase-5 hardening: the partial may only satisfy a literal for a
-    # SKILL.md that actually sources the telemetry partial. A SKILL.md that
-    # mentions ADLC_DISABLE_KIMI but wires up no telemetry partial is a genuine
-    # misconfiguration and must still be flagged (LESSON-019 #1 — don't let the
-    # guard re-rot into vacuity behind the indirection it was taught to follow).
-    sources_partial = TELEMETRY_PARTIAL_MARKER in text
-    findings: list[Finding] = []
-    for literal in CANONICAL_LITERALS:
-        # REQ-436 ADR-4: canonical follows the indirection — a literal absent
-        # from the SKILL.md text is still satisfied if it lives in a sourced
-        # telemetry partial, but ONLY when this SKILL.md sources that partial.
-        in_partial = sources_partial and literal in partials_blob
-        if literal not in text and not in_partial:
-            findings.append(
-                Finding(rel, 1, "canonical-helper",
-                        f"missing required literal: {literal!r}")
-            )
-    return findings
-
-
 def _iter_fences(text: str):
     """Yield ``(lang, fence_index, body_start_lineno, [(lineno, line), ...])``
     for each fenced shell block (``sh``/``bash``/``shell``).
@@ -435,13 +350,102 @@ def _safe_label(skill_path: Path, root: Path) -> str:
         return skill_path.name
 
 
+def find_agent_files(root: Path) -> Iterable[Path]:
+    """Yield every agent definition under <root>/agents/*.md, applying the
+    same SKIP_DIR_PARTS guard as find_skill_files.
+    """
+    agents_dir = root / "agents"
+    if not agents_dir.is_dir():
+        return
+    root_resolved = root.resolve()
+    for path in agents_dir.glob("*.md"):
+        if not path.is_file():
+            continue
+        try:
+            resolved = path.resolve()
+            rel = resolved.relative_to(root_resolved)
+        except (OSError, ValueError):
+            continue
+        if any(part in SKIP_DIR_PARTS for part in rel.parts[:-1]):
+            continue
+        yield path
+
+
+# `model:` frontmatter line — captures the value (lowercase, no quotes).
+MODEL_LINE_RE = re.compile(r"^\s*model\s*:\s*([A-Za-z0-9_.-]+)", re.MULTILINE)
+
+
+def check_model_policy(text: str, rel: str) -> list[Finding]:
+    """Verify that an agent's `model:` frontmatter is one of the permitted
+    values. The toolkit enforces Sonnet/Opus only; everything else is a
+    policy violation (haiku, kimi-k2.5, third-party models, the literal
+    placeholder `TBD`).
+
+    Only inspects the YAML frontmatter (the leading `---`-delimited block).
+    A model line OUTSIDE the frontmatter (e.g., in prose) is ignored.
+    """
+    findings: list[Finding] = []
+    # Restrict to the leading frontmatter block.
+    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+    if not fm_match:
+        return findings
+    fm_text = fm_match.group(1)
+    for m in MODEL_LINE_RE.finditer(fm_text):
+        value = m.group(1)
+        if value.lower() in ALLOWED_MODELS:
+            continue
+        # Resolve the absolute line number within the file (frontmatter starts at line 2).
+        line_no = fm_text[: m.start()].count("\n") + 2
+        findings.append(
+            Finding(rel, line_no, "model-policy",
+                    f"agent model '{value}' is not permitted — use 'sonnet' or 'opus' "
+                    f"(see MODEL_ASSIGNMENTS.md). 'TBD'/'haiku'/third-party models are policy violations.")
+        )
+    return findings
+
+
+def check_sf_checklist_source(text: str, rel: str) -> list[Finding]:
+    """Advisory: a SKILL.md that operates on Salesforce code (mentions Apex /
+    Flow / LWC / permission set globs OR `force-app/` paths OR the salesforce
+    rules) should source `partials/sf-quality-checklist.md` so the implementer
+    and reviewers see the always-on baseline.
+
+    Reports at most one finding per SKILL.md so a long skill doesn't get
+    flagged repeatedly. Skipped on the catalog and the rules document itself
+    (which are the source-of-truth files, not consumers).
+    """
+    # Don't flag the catalog / rules / checklist themselves.
+    rel_lower = rel.lower()
+    if any(s in rel_lower for s in (
+        "sf-skills-catalog.md",
+        "salesforce-rules.md",
+        "sf-quality-checklist.md",
+    )):
+        return []
+    # Only fire on SKILL.md files (this check is for the active skills, not the
+    # vendored sf-skills which are content-as-rubric, not orchestrators).
+    if not rel.endswith("SKILL.md"):
+        return []
+    # Skip the vendored sf-skills set — they ARE the rubrics; they don't source
+    # the checklist, the checklist references them.
+    if "/sf/" in rel.replace("\\", "/"):
+        return []
+    if not any(hint in text for hint in SF_ARTIFACT_HINTS):
+        return []
+    if SF_CHECKLIST_SOURCE_MARKER in text:
+        return []
+    return [
+        Finding(rel, 1, "sf-checklist-source",
+                "SKILL.md mentions Salesforce artifacts but does not source partials/sf-quality-checklist.md "
+                "(the always-on baseline). Add `!`cat .adlc/partials/sf-quality-checklist.md ...`` "
+                "under Context, or read it explicitly in the relevant step.")
+    ]
+
+
 def run(root: Path) -> list[Finding]:
     sentinels = load_sentinels(SENTINELS_FILE)
-    # REQ-436 ADR-4: read the sourced telemetry partials ONCE per run (never
-    # per SKILL.md) and thread the cached blob into check_canonical so a
-    # canonical literal that legitimately moved into a partial is satisfied.
-    partials_blob = load_partials_blob(root)
     findings: list[Finding] = []
+
     for skill_path in find_skill_files(root):
         # Compute the non-leaking label BEFORE the read so the io-error
         # branch can use it too (BUG-054 — was `str(skill_path)`).
@@ -449,10 +453,6 @@ def run(root: Path) -> list[Finding]:
         try:
             text = skill_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            # `str(exc)` is `[Errno N] <strerror>: '<abs path>'` and leaks the
-            # path; `exc.strerror` is the path-free POSIX reason. strerror is
-            # None only for a hand-constructed OSError (cannot arise from
-            # read_text), so the fallback is a constant — never `exc`.
             findings.append(
                 Finding(rel, 1, "io-error",
                         f"could not read: {exc.strerror or 'I/O error'}")
@@ -460,9 +460,23 @@ def run(root: Path) -> list[Finding]:
             continue
         findings.extend(check_sentinels(text, sentinels, rel))
         findings.extend(check_balance(text, rel))
-        findings.extend(check_canonical(text, rel, partials_blob))
         findings.extend(check_posix_fence(text, rel))
         findings.extend(check_cross_fence_fn(text, rel))
+        findings.extend(check_sf_checklist_source(text, rel))
+
+    # Agent files: enforce model-policy (Sonnet/Opus only).
+    for agent_path in find_agent_files(root):
+        rel = _safe_label(agent_path, root)
+        try:
+            text = agent_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            findings.append(
+                Finding(rel, 1, "io-error",
+                        f"could not read: {exc.strerror or 'I/O error'}")
+            )
+            continue
+        findings.extend(check_model_policy(text, rel))
+
     return findings
 
 

@@ -1,0 +1,65 @@
+# Preset: SFDC Industries (Core + Data Cloud + Agentforce + OmniStudio + CME)
+# ---------------------------------------------------------------------------
+# Stack shape:
+#   - Everything in sfdc-core (Apex, LWC, Flow, SOQL, Permissions, Deploy)
+#   - Data Cloud: connect/prepare/harmonize/segment/act/retrieve via sf data360
+#   - Agentforce: .agent files (Agent Script DSL) and/or Builder metadata
+#     (GenAiPlugin, GenAiFunction, GenAiPromptTemplate)
+#   - OmniStudio: OmniScript, FlexCard, Integration Procedure, Data Mapper,
+#     callable Apex (System.Callable)
+#   - Industries CME EPC: Product2, AttributeAssignment, ProductChildItem,
+#     EPC DataPack JSON
+#   - Vlocity Build: packDeploy / packExport / packGetDiffs for DataPacks
+#
+# Copy this file to .adlc/config.yml in the repo where you run /init, then
+# replace every `<placeholder>` with a real value AND prune the `industries:`
+# list to the surface areas this project actually uses.
+#
+#   cp ~/.claude/skills/presets/sfdc-industries.yml .adlc/config.yml
+
+project:
+  name: "<Project Display Name>"
+  preset: sfdc-industries
+
+salesforce:
+  app_prefix: "<AppPrefix>"          # 3–8 chars, PascalCase
+  api_version: "66.0"                # 66.0+ required for Agentforce
+  org_alias: "<default-org-alias>"
+  package_directories:
+    - "force-app"
+  agentforce_variant: "Employee"     # "Employee" | "Service" — drives deploy gate + persona shape
+  # Trim this list to what's actually in scope. Each flag wires the relevant
+  # sf-skills rubrics into Phase 4/5; leaving it on for unused surface areas
+  # produces noisy reviewer findings.
+  industries:
+    - datacloud
+    - agentforce
+    - omnistudio
+    - cme
+
+stack:
+  languages: [apex, javascript]
+  frontends: [lwc]
+  backends: [salesforce-platform]
+  databases: [salesforce-soql, datacloud]
+  ci: github-actions
+
+repos:
+  sfdc:
+    primary: true
+  # Optional sibling for an external integration repo (MuleSoft, Heroku app)
+  # integration:
+  #   path: ../integration
+
+merge_order:
+  - sfdc
+
+orgs:
+  sandbox: "<sandbox-alias>"
+  staging: "<staging-alias>"
+  prod:    "<prod-alias>"
+
+# Path to the sf agent test specs directory. /canary runs `sf agent test run`
+# against this set as a smoke gate before promoting to prod when Agentforce
+# is in scope.
+agentforce_test_specs: "force-app/main/default/agentTests"

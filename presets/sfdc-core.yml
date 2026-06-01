@@ -1,0 +1,51 @@
+# Preset: SFDC Core (Apex + LWC + Flow + SOQL + Permissions + Deploy)
+# ---------------------------------------------------------------------------
+# Stack shape:
+#   - Single Salesforce DX project (force-app/)
+#   - Apex (.cls / .trigger), LWC (lwc/**), Flows (.flow-meta.xml), SOQL
+#   - Permission Sets generated per feature with [AppPrefix]_[Component]_
+#     [AccessLevel] naming
+#   - sf CLI v2 for all deploys (sandbox -> staging -> prod via /canary)
+#   - GitHub Actions CI/CD running `sf project deploy validate` on every PR
+#   - No Industries (Agentforce, Data Cloud, OmniStudio, CME) — see
+#     sfdc-industries.yml when those are in scope
+#
+# Copy this file to .adlc/config.yml in the repo where you run /init, then
+# replace every `<placeholder>` with a real value.
+#
+#   cp ~/.claude/skills/presets/sfdc-core.yml .adlc/config.yml
+
+project:
+  name: "<Project Display Name>"
+  preset: sfdc-core
+
+salesforce:
+  app_prefix: "<AppPrefix>"          # 3–8 chars, PascalCase
+  api_version: "62.0"                # 66.0+ required if you later add Agentforce
+  org_alias: "<default-org-alias>"
+  package_directories:
+    - "force-app"
+  agentforce_variant: ""             # not used in core preset
+  industries: []                     # core preset ships none; switch presets to enable
+
+stack:
+  languages: [apex, javascript]
+  frontends: [lwc]
+  backends: [salesforce-platform]
+  databases: [salesforce-soql]
+  ci: github-actions
+
+repos:
+  sfdc:
+    primary: true
+
+merge_order:
+  - sfdc
+
+# sf CLI org aliases per environment. /canary promotes through this list and
+# /wrapup deploys to staging on merge. The prod alias is gated by ask-prompt
+# in .claude/settings.json — never auto-approved.
+orgs:
+  sandbox: "<sandbox-alias>"
+  staging: "<staging-alias>"
+  prod:    "<prod-alias>"

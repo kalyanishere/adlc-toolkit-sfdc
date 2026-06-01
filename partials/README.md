@@ -29,20 +29,7 @@ in the consumer repo.
 The partial defines a shell function and is sourced (with `.`, the POSIX
 equivalent of `source`) into the calling skill's bash block. The function is
 then called and its return code or exported variables drive the skill's
-behavior. Examples:
-
-- `kimi-gate.sh` — defines `adlc_kimi_gate_check` returning 0/1/2. Companion
-  `kimi-gate.md` documents the return-code registry.
-- `emit-step-telemetry.sh` — defines `_adlc_emit_step_telemetry` (the
-  `/analyze` per-step telemetry resolve-and-emit). Companion
-  `emit-step-telemetry.md` documents the caller-env contract and the
-  call-site protocol: the source line and the `_adlc_emit_step_telemetry`
-  call MUST live in the **same fenced block** (SKILL.md fenced blocks do not
-  share shell state across steps), which is non-obvious enough to need the
-  `.md` (the `kimi-gate.md` precedent). It **self-sources**
-  `kimi-tools-path.sh`, so call sites do NOT separately source the
-  `$KIMI_TOOLS` resolver — sourcing this one partial both resolves
-  `$KIMI_TOOLS` and defines the function.
+behavior.
 
 Skills invoke a model-2 partial like:
 
@@ -60,8 +47,7 @@ contract that callers must honor (a return-code registry, an exported-variable
 schema, an emit-format spec, or any "must do this when calling me" rule). Pure
 text-emitting partials like `ethos-include.sh` don't need one — `cat ETHOS.md`
 is its own contract. Function-exporting partials almost always need one,
-because the call-site protocol is non-obvious. `kimi-gate.md` is the canonical
-example.
+because the call-site protocol is non-obvious.
 
 ## Adding a new partial
 

@@ -1,18 +1,24 @@
-# Architecture — ADLC Toolkit
+# Architecture — ADLC Toolkit (Salesforce edition)
 
 ## Top-level layout
 
 ```
-adlc-toolkit/
+adlc-toolkit-sfdc/
 ├── ETHOS.md                    # 5 principles — injected into every skill
 ├── README.md                   # Install + skill catalog
+├── MODEL_ASSIGNMENTS.md        # Per-agent model registry (Sonnet | Opus only)
 ├── <skill>/SKILL.md            # One directory per skill (spec/, architect/, proceed/, etc.)
-├── agents/<agent>.md           # Specialized subagent definitions
+├── agents/<agent>.md           # Specialized subagent definitions (11 total, 5 Opus / 6 Sonnet)
+├── skills/sf/                  # Vendored sf-skills set (37 Salesforce skills) — added in a later batch
+├── skills/sf-router/SKILL.md   # File-glob dispatch into sf-skills — added in a later batch
 ├── templates/*.md              # Canonical templates (copied into consumer projects by /init)
-├── partials/                   # Shared snippets (ethos macro, kimi gate) sourced by SKILL.md files
-├── workflows/                  # Deterministic Dynamic Workflow scripts + schemas (copied into consumer projects by /init)
+├── partials/                   # Shared snippets (ethos macro, sf-quality-checklist) sourced by SKILL.md files
+├── workflows/                  # Deterministic Dynamic Workflow scripts + schemas
+├── tools/                      # Standalone CLIs (lint-skills SKILL.md hygiene linter)
+├── presets/                    # Stack-shaped starter configs for .adlc/config.yml (sfdc-core, sfdc-industries)
 └── .adlc/                      # Minimal self-tracking for toolkit-internal REQs
-    ├── context/                # This directory — project-overview, architecture, conventions
+    ├── context/                # This directory — project-overview, architecture, conventions, sf-skills-catalog
+    ├── archive/                # kimi-era/ — historical Kimi-era specs preserved for audit trail
     └── specs/REQ-xxx-*/        # Requirement specs for toolkit changes
 ```
 
@@ -23,7 +29,7 @@ Every skill is a single markdown file at `<skill-name>/SKILL.md` with this shape
 1. **Frontmatter**: `name`, `description`, optional `argument-hint`
 2. **Title + one-line framing** — what the skill does
 3. **Ethos injection**: `!`cat .adlc/ETHOS.md ...` bash macro that inlines the five principles at invocation time (consumer-project path preferred, toolkit-root path as fallback)
-4. **Context loading**: explicit `!bash` commands to read project-overview, architecture, conventions, relevant knowledge
+4. **Context loading**: explicit `!bash` commands to read project-overview, architecture, conventions, salesforce-rules, relevant knowledge
 5. **Input**: how the skill reads `$ARGUMENTS`
 6. **Prerequisites**: blocking checks (e.g., "verify `.adlc/context/project-overview.md` exists")
 7. **Instructions**: numbered steps, often with sub-steps and explicit bash for deterministic operations (each ```sh fenced block may be an independent shell — a shared shell function must be re-sourced from a partial in the same block that calls it; see "Partials")
@@ -37,9 +43,23 @@ Agents live in `agents/<agent-name>.md` and have frontmatter declaring:
 - `name` — identifier used when dispatching
 - `description` — tells the parent agent when to use this one
 - `tools` — explicit allowlist (or `*` for general-purpose agents)
-- `model` — optional override (e.g., `sonnet`, `haiku`) for cost/speed tuning
+- `model` — required, must be one of `sonnet` or `opus`. Haiku and any third-party model (Kimi K2.5 etc.) are out of scope for this toolkit by policy. The single registry is `MODEL_ASSIGNMENTS.md`.
 
-Agent bodies contain specialized instructions: role, focus areas, reporting format. The `/review` and `/proceed` skills dispatch multiple review-style agents in parallel (correctness-reviewer, quality-reviewer, architecture-reviewer, test-auditor, security-auditor, reflector).
+Agent bodies contain specialized instructions: role, focus areas, reporting format. The `/review` and `/proceed` skills dispatch the 6-member review panel in parallel (correctness-reviewer, quality-reviewer, architecture-reviewer, test-auditor, security-auditor, reflector).
+
+## Salesforce-aware reviewers (Phase 5 panel)
+
+Each Phase 5 reviewer is dimension-shaped, not artifact-shaped. The reviewer loads the relevant **sf-skill rubric** by file glob:
+
+| Dimension | Rubric loaded by file glob |
+|---|---|
+| correctness | sf-apex (.cls, .trigger), sf-soql (.soql, embedded SOQL), sf-flow (.flow-meta.xml) |
+| quality | sf-apex 150-pt, sf-lwc 165-pt (lwc/**), sf-flow 110-pt, sf-soql 100-pt |
+| architecture | sf-integration, sf-metadata; OmniStudio: sf-industry-commoncore-omnistudio-analyze |
+| test-coverage | sf-testing 120-pt (Apex tests), sf-ai-agentforce-testing (.agent test specs) |
+| security | salesforce-rules security section + sf-permissions + sf-connected-apps |
+
+The `task-implementer` (Phase 4) loads the same rubrics by glob plus `partials/sf-quality-checklist.md` so it generates rule-compliant code on the first pass.
 
 ## Template anatomy
 
@@ -50,14 +70,16 @@ Templates at `templates/*.md` are the canonical shape for each artifact type:
 - `bug-template.md` — bug reports (id, title, status, severity, dates; Description, Reproduction, Root Cause, Resolution)
 - `lesson-template.md` — lessons learned (id, title, domain, component, tags, req, created)
 - `assumption-template.md` — validated-assumption knowledge entries
+- `permissions-template.md` — Permissions.md generated by /wrapup for every feature that touches metadata (assignment matrix + dependency mapping per salesforce-rules)
+- `config-template.yml` — `.adlc/config.yml` skeleton with SF fields
 
 Templates are copied into consumer projects by `/init` (into `.adlc/templates/`). Consumer projects may customize their local copies; `/template-drift` detects divergence from the canonical set.
 
 ## Partials
 
-Partials at `partials/*.sh` are small POSIX shell snippets sourced by multiple SKILL.md files via Claude Code's `!`...`` macro syntax. Each partial emits a context block to stdout (e.g., `ethos-include.sh` emits the project ETHOS.md content with the consumer-project-first fallback). Skills invoke a partial with a two-level fallback — `!`sh .adlc/partials/<name>.sh 2>/dev/null || sh ~/.claude/skills/partials/<name>.sh`` — so the pattern works whether or not `/init` has copied the partials into the consumer repo. The `/init` skill copies `partials/` into `.adlc/partials/` alongside `templates/`. Keep partials trivially auditable: one snippet per file, no aggregator (`lib.sh`) until there are more than five.
+Partials at `partials/*.sh` and `partials/*.md` are shared snippets sourced by multiple SKILL.md files via Claude Code's `!`...`` macro syntax (executable partials) or POSIX `.` (sourceable function partials). Skills invoke a partial with a two-level fallback — `!`sh .adlc/partials/<name>.sh 2>/dev/null || sh ~/.claude/skills/partials/<name>.sh`` — so the pattern works whether or not `/init` has copied the partials into the consumer repo. The `/init` skill copies `partials/` into `.adlc/partials/` alongside `templates/`. Keep partials trivially auditable: one snippet per file, no aggregator (`lib.sh`) until there are more than five.
 
-A sourceable partial is also the **only** sanctioned mechanism for sharing a shell *function* across steps, because SKILL.md fenced blocks do not share shell state across steps — each may be an independent shell invocation, so a function defined in one fenced block is undefined in another (the silent telemetry-loss class — REQ-436, REQ-428). A shared function (e.g. `_adlc_emit_step_telemetry` in `partials/emit-step-telemetry.sh`, alongside the `kimi-gate.sh` precedent) must be re-sourced at *each* call site in the same fenced block as its invocation. This invariant is enforced structurally rather than by prose (LESSON-012): the `tools/lint-skills` `cross-fence-fn` check flags any function defined in one fence but called from a different fenced block. See conventions.md "Bash in skills" for the call-site rule.
+A sourceable partial is also the **only** sanctioned mechanism for sharing a shell *function* across steps, because SKILL.md fenced blocks do not share shell state across steps — each may be an independent shell invocation, so a function defined in one fenced block is undefined in another (the silent telemetry-loss class). A shared function must be re-sourced at *each* call site in the same fenced block as its invocation. This invariant is enforced structurally rather than by prose: the `tools/lint-skills` `cross-fence-fn` check flags any function defined in one fence but called from a different fenced block. See conventions.md "Bash in skills" for the call-site rule.
 
 ## ADLC pipeline shape (consumer-project view)
 
@@ -70,28 +92,28 @@ When a consumer project runs `/proceed REQ-xxx`, the pipeline phases are:
    ↓
 /validate (architecture + tasks)
    ↓
-Implement (parallel task-implementer agents)
+Implement (task-implementer agents per dependency tier; loads sf-quality-checklist + sf-skill rubric per artifact)
    ↓
-/verify (reflector + 5 reviewer agents in parallel)
+/verify (reflector + 5 reviewer agents in parallel; each reviewer loads relevant sf-skill rubric per touched file)
    ↓
 /review findings fixed in single pass
    ↓
 Create PR
    ↓
-PR cleanup + CI
+PR cleanup + CI (sf project deploy validate as part of pre-merge gate)
    ↓
-/wrapup (merge, artifact updates, knowledge capture, deploy)
+/wrapup (merge, artifact updates, knowledge capture, sf project deploy to staging/prod, Permissions.md gate, Agentforce deploy-order gate when applicable)
 ```
 
 Each phase has a validation gate. Failed validation loops up to 3 times before pausing for human input.
 
-`proceed/SKILL.md` keeps Step 0, the Pipeline State Tracking gate protocol, and Phase 5 (Verify, with the Kimi pre-pass gate) inline, but extracts the thinner phases to companion files referenced via `<!-- companion: <path> -->` markers in SKILL.md:
+`proceed/SKILL.md` keeps Step 0, the Pipeline State Tracking gate protocol, and Phase 5 (Verify) inline, but extracts the thinner phases to companion files referenced via `<!-- companion: <path> -->` markers in SKILL.md:
 
 - `proceed/phases-1-3-validation.md` — Phases 1–3 (spec validation, architect, architecture/tasks validation)
 - `proceed/phase-4-implementation.md` — Phase 4 (implement)
 - `proceed/phases-6-8-ship.md` — Phases 6–8 (PR creation, cleanup/CI, wrapup/merge)
 
-The companion marker is documentation-only — Claude Code does not auto-load referenced files. SKILL.md's inline summary is sufficient to execute each extracted phase; the companion holds the full step list for maintainers and for in-depth reference. Phase 5 is intentionally not extracted (ADR-3 of REQ-416) because the Kimi pre-pass gate-handoff is load-bearing.
+The companion marker is documentation-only — Claude Code does not auto-load referenced files. SKILL.md's inline summary is sufficient to execute each extracted phase; the companion holds the full step list for maintainers and for in-depth reference.
 
 ## Workflow engine
 
@@ -99,19 +121,25 @@ Some orchestration is too dispatch-heavy for a single subagent (a subagent canno
 
 **Agents are leaves; the script is the orchestrator.** The Workflow primitive has no shell or filesystem of its own, so every git/gh/file/state operation runs *inside* an `agent()` call; the script owns only control flow (sequence, fan-out, loops, merge ordering). This is the model that dissolves the "a subagent can't dispatch subagents" constraint: the script dispatches the leaves and parallelizes the read/report phases that pay for fan-out while serializing the single writer.
 
-**`/sprint` is a two-engine dispatcher.** It selects the **workflow** engine only when the `Workflow` tool is actually invocable in the session **and** the run opts in (`--workflow`, or once the engine graduates to default); otherwise it uses the **legacy** background-runner engine with no behavior change. Dynamic Workflows is a research-preview, plan-gated capability that can be absent (headless/cron runs, non-qualifying plans), so the legacy engine is an always-available, unchanged fallback — the dispatcher degrades to it (with an explicit notice) rather than failing when the workflow engine is requested but unavailable.
+**`/sprint` is a two-engine dispatcher.** It selects the **workflow** engine only when the `Workflow` tool is actually invocable in the session **and** the run opts in (`--workflow`); otherwise it uses the **legacy** background-runner engine with no behavior change.
 
-**State has two layers.** The durable `pipeline-state.json` remains the cross-tool artifact that `/status` and the legacy engine read and that survives across sessions; the workflow **journal** is the in-run cache that powers `resumeFromRunId` (answer-a-halt-and-relaunch) within a single workflow run. They serve different layers and neither replaces the other — keeping `pipeline-state.json` is what lets `/status` and the legacy path keep working unchanged.
+**State has two layers.** The durable `pipeline-state.json` remains the cross-tool artifact that `/status` and the legacy engine read and that survives across sessions; the workflow **journal** is the in-run cache that powers `resumeFromRunId` (answer-a-halt-and-relaunch) within a single workflow run.
 
-## Knowledge retrieval (current and evolving)
+## Salesforce stack assumptions
 
-Skills retrieve relevant prior knowledge at context-loading time. The current implementation is a **3-tier grep** over `.adlc/knowledge/lessons/*.md` frontmatter (component > domain+prefix > tag), used by `/review` and `/spec`. REQ-258 upgrades this to a **weighted-score retriever** over three corpora (lessons + specs + bugs), pooled globally to top-15 rather than per-corpus capped.
+The toolkit assumes a Salesforce development project. The consumer's `.adlc/config.yml` declares which parts of the SF surface are in scope (Apex, LWC, Flow, SOQL always; Data Cloud, Agentforce, OmniStudio/Industries opt-in). Skill behavior conditions on those flags — e.g., the Agentforce deploy-order gate fires only when `industries: [agentforce]` is declared.
+
+CLI: always `sf` (the modern Salesforce CLI v2), never `sfdx` (deprecated). Settings.json pre-approves routine `sf` invocations; production deploys (`sf project deploy start --target-org prod*`, `sf agent activate`) are gated by ask-prompt.
+
+## Knowledge retrieval
+
+Skills retrieve relevant prior knowledge at context-loading time via a **weighted-score retriever** over three corpora (lessons + specs + bugs), pooled globally to top-15. Used by `/spec`, `/review`, and others. See `spec/SKILL.md` Step 1.6 for the scoring rule.
 
 ## Key cross-cutting dependencies
 
-- **Atomic REQ counter**: `~/.claude/.global-next-req` is a shared counter across all consumer repos to guarantee unique REQ IDs. Protected by a POSIX `mkdir`-based lock at `~/.claude/.global-next-req.lock.d` for concurrent-safe increments. The lock acquisition pre-checks `[ -L "$LOCK" ]` and refuses to run if the path is a symlink, defending against a TOCTOU symlink-swap that would otherwise let an attacker redirect `mkdir`/`rmdir` traffic (LESSON-014, REQ-416 ADR-4).
-- **Atomic BUG counter**: `~/.claude/.global-next-bug` is the cross-repo machine-global counter for BUG IDs (REQ-441), allocated by `/bugfix` Phase 1 with the *same* `mkdir`-lock + `[ -L "$LOCK" ]` symlink pre-check + fail-loud guards as the global REQ counter — a faithful mirror of the `/spec` Step 2 pattern (the per-repo `.adlc/.next-bug` is deprecated, ignored if present). BUG ids therefore resolve to one work item across every repo, like REQ ids.
-- **Atomic LESSON counter**: `~/.claude/.global-next-lesson` is the cross-repo machine-global counter for LESSON IDs (REQ-473), allocated by BOTH `/wrapup` (Step 4) and `/bugfix` (lesson capture) with the *same* `mkdir`-lock + `[ -L "$LOCK" ]` symlink pre-check + fail-loud guards as the global REQ/BUG counters — a faithful mirror of the `/spec` Step 2 pattern. The two skills deliberately share the single global lock `~/.claude/.global-next-lesson.lock.d` so concurrent `/wrapup` and `/bugfix` runs mutually exclude and cannot double-allocate a LESSON id. LESSON ids therefore resolve to one work item across every repo, like REQ and BUG ids (the per-repo `.adlc/.next-lesson` is deprecated, ignored if present).
-- **Atomic per-project counter**: `.adlc/.next-assume` (ASSUME ids) is a per-project counter that prevents concurrent `/sprint` pipelines from double-allocating ids during wrapup. It is protected by the same `mkdir`-lock + symlink pre-check pattern as the global counters (lock dir `.adlc/.next-assume.lock.d`). ASSUME ids stay per-project because they are minted only by `/wrapup` within a single repo and have no cross-repo reference surface.
+- **Atomic REQ counter**: `~/.claude/.global-next-req` is a shared counter across all consumer repos to guarantee unique REQ IDs. Protected by a POSIX `mkdir`-based lock at `~/.claude/.global-next-req.lock.d` for concurrent-safe increments. The lock acquisition pre-checks `[ -L "$LOCK" ]` and refuses to run if the path is a symlink, defending against a TOCTOU symlink-swap.
+- **Atomic BUG counter**: `~/.claude/.global-next-bug` is the cross-repo machine-global counter for BUG IDs, allocated by `/bugfix` Phase 1 with the same `mkdir`-lock + symlink pre-check + fail-loud guards as the global REQ counter.
+- **Atomic LESSON counter**: `~/.claude/.global-next-lesson` is the cross-repo machine-global counter for LESSON IDs, allocated by BOTH `/wrapup` (Step 4) and `/bugfix` (lesson capture). The two skills share the single global lock `~/.claude/.global-next-lesson.lock.d` so concurrent runs mutually exclude.
+- **Atomic per-project counter**: `.adlc/.next-assume` (ASSUME ids) is a per-project counter protected by the same `mkdir`-lock pattern.
 - **Worktree isolation**: `/proceed` creates a git worktree per REQ at `.worktrees/REQ-xxx` so multiple pipelines run without collision. `/sprint` orchestrates parallel worktrees.
 - **Symlink install**: changes committed to this repo are live immediately for every Claude Code session on the machine. No build, no deploy.

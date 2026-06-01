@@ -6,9 +6,9 @@
 // the pure section is the only thing under test. (REQ-474, TASK-063, ADR-10)
 //
 // These are the "Verify, Don't Trust" backstop for the parts of the engine that
-// can silently fail: the LESSON-008 citation boundary (`validateCitations`), the
-// BR-7 review consolidation gate (`dedupeAndRank`), the BR-12 Preflight max-5
-// bound (`selectEligible`), and the cross-REQ merge grouping (`groupCrossRepoReqs`).
+// can silently fail: the BR-7 review consolidation gate (`dedupeAndRank`), the
+// BR-12 Preflight max-5 bound (`selectEligible`), and the cross-REQ merge
+// grouping (`groupCrossRepoReqs`).
 // The orchestration itself is dogfooded via `/sprint --workflow`; only the pure,
 // security-critical helpers get unit coverage here.
 //
@@ -32,9 +32,6 @@ const assert = require('node:assert/strict');
 // suite runs identically from any cwd (toolkit root, a worktree, or CI). (REQ-474)
 const helpers = require('./_load-pure.js')(require('node:path').join(__dirname, '..', 'adlc-sprint.workflow.js'));
 const {
-  validateCitations,
-  sanitizeDescription,
-  candidatesByDimension,
   dedupeAndRank,
   selectEligible,
   orderByTier,
@@ -50,149 +47,6 @@ const {
   sharesRepo,
   terminalValue,
 } = helpers;
-
-// ===========================================================================
-// validateCitations — the LESSON-008 security boundary. The MANDATORY cases
-// (task AC): reject `..`, off-`changedFiles` paths, charset violations
-// (spaces / shell metachars), and reflector/unknown dimensions; sanitize the
-// description; accept a valid in-diff candidate.
-// ===========================================================================
-
-test('validateCitations: accepts a valid in-diff reviewer candidate', () => {
-  const changed = ['src/app.js', 'lib/util.js'];
-  const cands = [{ dimension: 'security', path: 'src/app.js', description: 'SQL injection risk', lineRange: '10-20' }];
-  const out = validateCitations(cands, changed);
-  assert.equal(out.length, 1);
-  assert.deepEqual(out[0], {
-    dimension: 'security',
-    path: 'src/app.js',
-    description: 'SQL injection risk',
-    lineRange: '10-20',
-  });
-});
-
-test('validateCitations: REJECTS directory traversal (..) paths (LESSON-008)', () => {
-  const changed = ['src/app.js'];
-  const cands = [
-    { dimension: 'security', path: '../etc/passwd', description: 'x' },
-    { dimension: 'security', path: 'src/../../../secret', description: 'x' },
-    { dimension: 'security', path: 'a/../b.js', description: 'x' },
-  ];
-  assert.deepEqual(validateCitations(cands, changed), []);
-});
-
-test('validateCitations: REJECTS paths absent from changedFiles (anchors to real diff)', () => {
-  const changed = ['src/app.js'];
-  // Charset-valid + traversal-free, but NOT a changed file → dropped.
-  const cands = [{ dimension: 'correctness', path: 'src/other.js', description: 'x' }];
-  assert.deepEqual(validateCitations(cands, changed), []);
-});
-
-test('validateCitations: REJECTS charset violations — spaces, shell metachars, NUL', () => {
-  // Each path is listed in changedFiles so the ONLY reason to drop is the
-  // charset allowlist ^[A-Za-z0-9_./-]+$ — proving the regex, not the diff check.
-  const bad = [
-    'src/a b.js',          // space
-    'src/a;rm -rf.js',     // shell metachar + space
-    'src/$(whoami).js',    // command substitution
-    'src/a|b.js',          // pipe
-    'src/a\u0000b.js',      // NUL byte (control char)
-    'src/a\tb.js',          // tab (control char)
-    'src/a`b`.js',         // backtick
-    'src/a&b.js',          // ampersand
-  ];
-  const changed = bad.slice();
-  const cands = bad.map((p) => ({ dimension: 'quality', path: p, description: 'x' }));
-  assert.deepEqual(validateCitations(cands, changed), []);
-});
-
-test('validateCitations: REJECTS the reflector dimension and unknown dimensions', () => {
-  const changed = ['src/app.js'];
-  const cands = [
-    { dimension: 'reflector', path: 'src/app.js', description: 'x' },   // reflector NEVER gets candidates (BR-9)
-    { dimension: 'bogus', path: 'src/app.js', description: 'x' },       // unknown dim
-    { dimension: '', path: 'src/app.js', description: 'x' },            // empty dim
-  ];
-  assert.deepEqual(validateCitations(cands, changed), []);
-});
-
-test('validateCitations: REJECTS non-string / empty / missing paths and non-object entries', () => {
-  const changed = ['src/app.js'];
-  const cands = [
-    null,
-    'not-an-object',
-    { dimension: 'security', description: 'x' },               // no path
-    { dimension: 'security', path: '', description: 'x' },     // empty path
-    { dimension: 'security', path: 42, description: 'x' },     // non-string path
-  ];
-  assert.deepEqual(validateCitations(cands, changed), []);
-});
-
-test('validateCitations: SANITIZES the description (strips injection punctuation/control chars)', () => {
-  const changed = ['src/app.js'];
-
-  // Precise small case — each unsafe char (<, >, `, !) maps to exactly one space;
-  // the safe chars (letters, digits, parens, space) pass through unchanged.
-  const exact = validateCitations(
-    [{ dimension: 'architecture', path: 'src/app.js', description: 'a<b>`c`!' }], changed,
-  );
-  assert.equal(exact[0].description, 'a b  c  ');
-
-  // Adversarial case — a script/injection payload with newline, braces, backticks.
-  const cands = [{
-    dimension: 'architecture',
-    path: 'src/app.js',
-    description: 'see <script>alert(1)</script>\n{inject} `cmd` !!',
-  }];
-  const out = validateCitations(cands, changed);
-  assert.equal(out.length, 1);
-  // No char outside the safe set [A-Za-z0-9 .,:;()/_'"-] survives — and no control
-  // char (newline/backtick/brace) leaks into a reviewer prompt. (LESSON-008)
-  assert.ok(/^[A-Za-z0-9 .,:;()/_'"-]*$/.test(out[0].description));
-  assert.ok(!/[<>{}`\n!]/.test(out[0].description), 'injection chars must be gone');
-  // Safe alphanumeric content survives the sanitization.
-  assert.ok(out[0].description.includes('script'));
-  assert.ok(out[0].description.includes('alert(1)'));
-});
-
-test('validateCitations: drops a malformed lineRange but keeps the survivor', () => {
-  const changed = ['src/app.js'];
-  const good = validateCitations(
-    [{ dimension: 'security', path: 'src/app.js', description: 'x', lineRange: '5' }], changed,
-  );
-  assert.equal(good[0].lineRange, '5');
-
-  const bad = validateCitations(
-    [{ dimension: 'security', path: 'src/app.js', description: 'x', lineRange: '5; rm' }], changed,
-  );
-  assert.equal(bad.length, 1);
-  assert.ok(!('lineRange' in bad[0]), 'a malformed lineRange must be dropped, candidate kept');
-});
-
-test('validateCitations: tolerates null/empty inputs (never throws)', () => {
-  assert.deepEqual(validateCitations(null, null), []);
-  assert.deepEqual(validateCitations([], ['src/app.js']), []);
-  assert.deepEqual(validateCitations([{ dimension: 'security', path: 'a.js', description: 'x' }], null), []);
-});
-
-test('sanitizeDescription: null/undefined become empty string', () => {
-  assert.equal(sanitizeDescription(null), '');
-  assert.equal(sanitizeDescription(undefined), '');
-  assert.equal(sanitizeDescription('plain text 1.2'), 'plain text 1.2');
-});
-
-test('candidatesByDimension: buckets validated survivors by reviewer dimension', () => {
-  const changed = ['a.js', 'b.js'];
-  const validated = validateCitations([
-    { dimension: 'security', path: 'a.js', description: 'one' },
-    { dimension: 'security', path: 'b.js', description: 'two' },
-    { dimension: 'quality', path: 'a.js', description: 'three' },
-  ], changed);
-  const byDim = candidatesByDimension(validated);
-  assert.equal(byDim.security.length, 2);
-  assert.equal(byDim.quality.length, 1);
-  assert.ok(!('reflector' in byDim));
-});
 
 // ===========================================================================
 // dedupeAndRank — the BR-7 consolidation gate. Dedupe within a repo, tag

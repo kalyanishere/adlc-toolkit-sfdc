@@ -39,34 +39,55 @@ Execute these phases in order, maintaining `pipeline-state.json` throughout:
 
 ## Phase 5 Inline Review Checklists
 
-Since you cannot dispatch review agents, run these checklists yourself:
+Since you cannot dispatch review agents, run these checklists yourself in subagent mode. The full checklists live in the corresponding agent definitions under `agents/`; this is the condensed Salesforce-aware inline version.
 
-### Reflection Checklist
-- Does the code do what the requirement specifies?
-- Are all acceptance criteria met?
-- Are edge cases handled?
-- Follows naming conventions? Uses logger? Config centralized?
-- Proper layering (routes -> services -> repositories)?
-- New code has tests? Tests cover error paths?
-- No TODOs, commented-out code, or debug logging left behind?
-- Check `.adlc/knowledge/lessons/` for applicable pitfalls
+**Before running the checklists**: identify the touched-file set, look up each file's sf-skill rubric in `.adlc/context/sf-skills-catalog.md`, and read the matching rubric(s) from `skills/sf/<skill>/SKILL.md`. The rubric scoring grid is the bar you measure against. Also read `salesforce-rules.md` (always-on baseline).
 
-### Correctness Review
-- Logic errors, off-by-one, null handling
-- Race conditions, async/await issues
-- Error handling gaps
-- Security issues (injection, auth bypass, data exposure)
+### Reflection Checklist (mirrors agents/reflector.md)
+- Does the code meet the requirement / task acceptance criteria?
+- Walk salesforce-rules.md baseline: sharing keyword, AccessLevel, no @future, no SOQL/DML in loops, no hardcoded IDs/URLs, no SeeAllData=true, no System.debug in prod, perm-set naming, Named Credentials, ApexDoc, API version
+- Walk each loaded sf-skill rubric end-to-end; estimate score
+- Check `.adlc/knowledge/lessons/` for applicable pitfalls (Grep by component/domain/tags)
+- No TODOs, commented-out code, debug log lines left behind
 
-### Quality Review
-- Convention compliance (naming, logging, config)
-- Code duplication
-- Input validation
+### Correctness Review (mirrors agents/correctness-reviewer.md)
+- Apex: governor-limit blast radius, mixed DML, trigger recursion, async finalizer correctness
+- SOQL injection (bind variables only); WITH USER_MODE matches sharing context
+- Logic errors (off-by-one, null guards, type coercion)
+- Error handling around DML / callouts / async jobs
+- LWC: uncaught promises, missing decorators
+- Flow: bulk safety; recursion in record-triggered flows
+- Agentforce: ground-truth fabrication, business rules in free-form prompt
 
-### Architecture Review
-- Layered architecture compliance
-- Test coverage for new code
-- Mock completeness
-- API response format compliance
+### Quality Review (mirrors agents/quality-reviewer.md)
+- Apex naming (PascalCase / camelCase / ALL_CAPS_SNAKE_CASE)
+- Sharing keyword and AccessLevel present
+- LWC: SLDS utility classes, `handle…` prefix on event handlers, `if:true`/`for:each` with key, `@wire` correctly used
+- SOQL: indexed WHERE fields, LIMIT, USER_MODE
+- Permission set naming `[AppPrefix]_[Component]_[AccessLevel]`
+- Score against the loaded rubric grid (e.g., generating-apex 150-pt)
+
+### Architecture Review (mirrors agents/architecture-reviewer.md)
+- One Trigger Per Object; handler/service/selector layering
+- LWC composability; container/presentational split
+- Flow: subflows over duplication; fault paths
+- Agentforce: deploy order (fields → Apex → Flow → GenAi* → publish → activate); business rules in Flow/Apex not in prompt
+- Integration: Named Credentials, External Services, Platform Events
+- Cross-repo contracts (when `.adlc/config.yml` declares siblings) — REST URLs, Platform Event payloads stable
+
+### Test Coverage Review (mirrors agents/test-auditor.md)
+- ≥75% Apex coverage with meaningful assertions
+- `Test.startTest`/`Test.stopTest` boundaries, `@TestSetup`, `System.runAs`
+- Mock callouts via `Test.setMock`; never SeeAllData=true
+- Bulk-trigger tests (200-record); LWC Jest happy + error
+- `sf agent test` specs current when `industries: [agentforce]`
+
+### Security Review (mirrors agents/security-auditor.md)
+- FLS / sharing / USER_MODE compliance
+- Permission set anti-patterns (View/Modify All Data; Read+Delete combo; >10 object permissions; PII bundled with general access)
+- Permissions.md present and complete (when metadata changed)
+- Connected App OAuth scopes least-privilege
+- Named Credentials for callouts; no hardcoded URLs/tokens
 
 After running all checklists, fix Critical and Major issues inline. Commit fixes with `fix(scope): address verify finding [REQ-xxx]`.
 

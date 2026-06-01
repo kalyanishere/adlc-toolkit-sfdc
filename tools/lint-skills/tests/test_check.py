@@ -19,7 +19,6 @@ CHECK_PY = REPO_ROOT / "tools" / "lint-skills" / "check.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
-PARTIALS_DIR = REPO_ROOT / "partials"
 
 
 def _stage(tmp_path: Path, *fixture_names: str) -> Path:
@@ -29,27 +28,6 @@ def _stage(tmp_path: Path, *fixture_names: str) -> Path:
         sub = tmp_path / name
         sub.mkdir()
         shutil.copyfile(src, sub / "SKILL.md")
-    return tmp_path
-
-
-def _stage_partial(tmp_path: Path, layout: str = "partials") -> Path:
-    """Stage the real `partials/emit-step-telemetry.sh` under the scan root so
-    `check_canonical`'s partial-aware path (REQ-436 ADR-4) is exercised.
-
-    `check.py`'s `load_partials_blob` resolves, in order, `<root>/partials/*.sh`
-    then `<root>/.adlc/partials/*.sh`. `layout` selects which of those two real
-    layouts (toolkit-self vs consumer) to stage into. The real partial is the
-    source of canonical literals L2/L3, so staging it is what makes the
-    post-REQ-436 `canonical-via-partial-skill` shape clean — exactly the
-    indirection ADR-4 generalizes the guard to follow.
-    """
-    assert layout in ("partials", ".adlc/partials")
-    pdir = tmp_path / layout
-    pdir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(
-        PARTIALS_DIR / "emit-step-telemetry.sh",
-        pdir / "emit-step-telemetry.sh",
-    )
     return tmp_path
 
 
@@ -114,44 +92,6 @@ def test_unbalanced_parens_reports_balance_finding(tmp_path):
     assert "unbalanced-parens/SKILL.md" in result.stdout
     # Fence opens on line 3 of the fixture
     assert "fence at line 3" in result.stdout
-
-
-def test_missing_canonical_reports_per_rule(tmp_path):
-    root = _stage(tmp_path, "missing-canonical")
-    result = _run(root)
-    assert result.returncode >= 5, result.stdout
-    # All five canonical literals should be reported as separate findings
-    assert result.stdout.count("canonical-helper") == 5
-    assert "start_s=$(date -u +%s)" in result.stdout
-    assert "duration_ms=$(( ($(date -u +%s) - $start_s) * 1000 ))" in result.stdout
-    assert '"$KIMI_TOOLS"/emit-telemetry.sh ' in result.stdout
-    assert ". .adlc/partials/kimi-gate.sh 2>/dev/null" in result.stdout
-    assert ". .adlc/partials/kimi-tools-path.sh 2>/dev/null" in result.stdout
-
-
-def test_kimi_gate_happy_path_is_clean(tmp_path):
-    root = _stage(tmp_path, "kimi-gate-ok")
-    result = _run(root)
-    assert result.returncode == 0, result.stdout + result.stderr
-    # Not just rc 0 — assert the fixture produces NO findings at all, so a
-    # future regression that emits warnings while keeping exit 0 is caught
-    # (mirrors test_clean_fixture_is_clean's stricter assertion surface).
-    assert "canonical-helper" not in result.stdout, result.stdout
-    assert result.stdout.strip() == "", result.stdout
-
-
-def test_missing_only_resolver_source_reports_one(tmp_path):
-    """REQ-433 guard: a skill that kept the `"$KIMI_TOOLS"/…` invocation but
-    lost the kimi-tools-path resolver-source line must raise exactly ONE
-    canonical-helper finding naming that literal — proves the linter enforces
-    each literal independently, not as an all-or-nothing group."""
-    root = _stage(tmp_path, "missing-resolver-source")
-    result = _run(root)
-    assert result.returncode >= 1, result.stdout
-    # Exactly one finding, and it is the missing resolver-source literal (the
-    # count==1 already proves the other four present literals were NOT flagged).
-    assert result.stdout.count("canonical-helper") == 1, result.stdout
-    assert ". .adlc/partials/kimi-tools-path.sh 2>/dev/null" in result.stdout
 
 
 def test_mixed_clean_and_corrupt_scans_both(tmp_path):
@@ -223,78 +163,6 @@ def test_exit_code_capped_at_255(tmp_path):
 # ---------------------------------------------------------------------------
 # REQ-436 ADR-8: realistic post-change fixtures for every TASK-049 guard.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("layout", ["partials", ".adlc/partials"])
-def test_canonical_satisfied_via_partial(tmp_path, layout):
-    """REQ-436 ADR-4: the post-REQ-436 `analyze` shape is clean.
-
-    `canonical-via-partial-skill` mentions `ADLC_DISABLE_KIMI` and keeps
-    L1/L4/L5 inline but NOT L2/L3 (they moved into
-    `partials/emit-step-telemetry.sh`). With the real telemetry partial staged
-    under the scan root — in EITHER resolution layout `load_partials_blob`
-    supports — `check_canonical` must find L2/L3 in the partial blob and emit
-    ZERO `canonical-helper` findings. Asserts the indirection-following guard
-    on the genuine post-change input (LESSON-019 #3), both layouts.
-    """
-    root = _stage(tmp_path, "canonical-via-partial-skill")
-    _stage_partial(root, layout=layout)
-    result = _run(root)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "canonical-helper" not in result.stdout, result.stdout
-    assert result.stdout.strip() == "", result.stdout
-
-
-def test_canonical_via_partial_negative_without_partial(tmp_path):
-    """The negative half of ADR-4: the SAME SKILL.md staged WITHOUT any
-    telemetry partial yields EXACTLY the two missing-canonical findings (L2 and
-    L3). This proves the partial is genuinely what satisfies them — ADR-4 is
-    load-bearing, not vacuously green (without it the post-REQ-436 shape would
-    self-inflict a regression of REQ-428's AC-3).
-    """
-    root = _stage(tmp_path, "canonical-via-partial-skill")
-    result = _run(root)
-    assert result.returncode == 2, result.stdout
-    assert result.stdout.count("canonical-helper") == 2, result.stdout
-    # The two absent literals are exactly L2 and L3 (the relocated ones); the
-    # inline L1/L4/L5 must NOT be flagged (count==2 already implies that).
-    assert "duration_ms=$(( ($(date -u +%s) - $start_s) * 1000 ))" in result.stdout
-    assert '"$KIMI_TOOLS"/emit-telemetry.sh ' in result.stdout
-    assert "start_s=$(date -u +%s)" not in result.stdout
-    assert ". .adlc/partials/kimi-gate.sh 2>/dev/null" not in result.stdout
-    assert ". .adlc/partials/kimi-tools-path.sh 2>/dev/null" not in result.stdout
-
-
-def test_canonical_partial_does_not_rescue_skill_that_does_not_source_it(tmp_path):
-    """REQ-436 Phase-5 security hardening: a SKILL.md that mentions
-    ADLC_DISABLE_KIMI but sources NO telemetry partial must NOT be rescued by
-    an unrelated `partials/emit-step-telemetry.sh` elsewhere in the repo.
-    Otherwise the partial-aware canonical rule (ADR-4) re-rots into vacuity —
-    the exact LESSON-019 #1 failure ADR-4 exists to prevent.
-    """
-    sub = tmp_path / "no-source"
-    sub.mkdir()
-    (sub / "SKILL.md").write_text(
-        "# no-source\n\n"
-        "```sh\n"
-        ". .adlc/partials/kimi-gate.sh 2>/dev/null || "
-        ". ~/.claude/skills/partials/kimi-gate.sh\n"
-        ". .adlc/partials/kimi-tools-path.sh 2>/dev/null || "
-        ". ~/.claude/skills/partials/kimi-tools-path.sh\n"
-        "start_s=$(date -u +%s)\n"
-        "# anchor: ADLC_DISABLE_KIMI gate-case comment\n"
-        "```\n"
-    )
-    # A telemetry partial DOES exist in the repo (it supplies L2/L3) — but this
-    # SKILL.md never sources it, so the guard must still flag the missing L2/L3.
-    _stage_partial(tmp_path, layout="partials")
-    result = _run(tmp_path)
-    assert result.returncode >= 2, result.stdout
-    assert result.stdout.count("canonical-helper") == 2, result.stdout
-    assert "duration_ms=$(( ($(date -u +%s) - $start_s) * 1000 ))" in result.stdout
-    assert '"$KIMI_TOOLS"/emit-telemetry.sh ' in result.stdout
-    # The inline L1/L4/L5 are present, so they are NOT flagged (count==2 implies it).
-    assert "start_s=$(date -u +%s)" not in result.stdout
 
 
 def test_posix_fence_flags_sh_and_shell_not_bash(tmp_path):

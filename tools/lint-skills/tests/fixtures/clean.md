@@ -12,4 +12,4 @@ total=$(( 1 + 2 ))
 echo $total
 ```
 
-No Kimi gate here, so canonical-helper does not apply.
+A benign SKILL.md — no sentinels, balanced fences, no cross-fence functions.

@@ -71,15 +71,11 @@ export const meta = {
 // validation. (ADR-7)
 //
 // Dimension note (load-bearing):
-//   - CANDIDATES.candidates[].dimension enum = the 5 REVIEWER dimensions only
-//     (correctness, quality, architecture, test-coverage, security). The
-//     reflector receives NO candidates (BR-9), so `reflector` is absent there.
 //   - FINDINGS.dimension enum = 6 dimensions (the 5 reviewers PLUS reflector),
 //     because the reflector also returns findings.
 
-// The 5 reviewer dimensions — the only sources of advisory pre-pass candidates.
-// SINGLE source of truth, consumed by both the CANDIDATES enum and the helpers
-// (validateCitations / fixedPairs) so the allowlists never drift. (ADR-7)
+// The 5 reviewer dimensions — single source of truth for the helpers
+// (fixedPairs) so the allowlists never drift. (ADR-7)
 const REVIEWER_DIMENSIONS = [
   'correctness',
   'quality',
@@ -180,39 +176,6 @@ const FINDINGS = {
           userFacing: { type: 'boolean' },
           lessonId: { type: 'string' },
           fromCandidate: { type: 'boolean' },
-        },
-      },
-    },
-  },
-};
-
-// CANDIDATES — returned by the per-repo `kimi-pre-pass` agent (target design).
-// `invoked` drives the `candidates ⇒ invoked` ghost-skip assertion; the script
-// validates each candidate's `path` against the TRUSTED `changedFiles` and
-// slices candidates per reviewer dimension. `candidates[].dimension` is one of
-// the 5 REVIEWER dimensions only — the reflector gets none. (BR-9, BR-10)
-const CANDIDATES = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['repo', 'invoked', 'exit', 'gateReason', 'changedFiles', 'candidates'],
-  properties: {
-    repo: { type: 'string' },
-    invoked: { type: 'boolean' },
-    exit: { type: 'integer' },
-    gateReason: { type: 'string', enum: ['ok', 'no-binary', 'disabled-via-env'] },
-    changedFiles: { type: 'array', items: { type: 'string' } }, // TRUSTED
-    candidates: {
-      type: 'array',
-      items: {
-        // UNTRUSTED — sourced from Kimi stdout; validated in deterministic JS.
-        type: 'object',
-        additionalProperties: false,
-        required: ['dimension', 'path', 'description'],
-        properties: {
-          dimension: { type: 'string', enum: REVIEWER_DIMENSIONS },
-          path: { type: 'string' },
-          lineRange: { type: 'string' },
-          description: { type: 'string' },
         },
       },
     },
@@ -475,79 +438,6 @@ function cmp(a, b) {
 }
 
 // ===========================================================================
-// validateCitations(candidates, changedFiles) — PURE JS, the LESSON-008
-// security boundary for the Kimi pre-pass. (ADR-8, BR-9, BR-10)
-//
-// The `kimi-pre-pass` agent transcribes Kimi's UNTRUSTED stdout into candidate
-// objects verbatim; this function is the script-side gate that decides which of
-// them are safe to forward to the reviewers. It NEVER trusts a candidate's
-// `path` — that string came from a model, so it could be a traversal (`..`), an
-// injection payload, or a hallucinated file outside the diff.
-//
-//   candidates:   UNTRUSTED {dimension, path, lineRange?, description}[] (or null)
-//   changedFiles: TRUSTED string[] — git `--name-only` output from the worktree
-//
-// A candidate SURVIVES iff ALL hold:
-//   - `path` is a non-empty string,
-//   - `path` does NOT contain `..` (no directory traversal),
-//   - `path` matches ^[A-Za-z0-9_./-]+$ (no spaces, shell metachars, NULs, etc.),
-//   - `path` is present in `changedFiles` (the citation must point at a file this
-//     REQ actually changed — anchors the advisory to the real diff),
-//   - `dimension` is one of the 5 REVIEWER dimensions (never reflector).
-// Survivors are returned with their `description` SANITIZED: every char outside
-// [A-Za-z0-9 .,:;()/_'"-] is replaced with a space (so an untrusted description
-// can never carry control chars or prompt-injection punctuation into a reviewer
-// prompt). `lineRange` is kept only when it is a sane `\d+(-\d+)?` token.
-// Anything dropped is NOT forwarded. Fully deterministic — no Date.now /
-// Math.random / fs. (runtime contract)
-// ===========================================================================
-function validateCitations(candidates, changedFiles) {
-  const PATH_RE = /^[A-Za-z0-9_./-]+$/;
-  const LINE_RE = /^\d+(-\d+)?$/;
-  const changed = new Set(changedFiles || []);
-  const out = [];
-  for (const c of candidates || []) {
-    if (!c || typeof c !== 'object') continue;
-    const path = c.path;
-    if (typeof path !== 'string' || path.length === 0) continue;
-    if (path.indexOf('..') !== -1) continue;            // no traversal
-    if (!PATH_RE.test(path)) continue;                  // charset allowlist
-    if (!changed.has(path)) continue;                   // must be in the real diff
-    if (!REVIEWER_DIMENSIONS.includes(c.dimension)) continue;  // reviewers only, never reflector
-    const survivor = {
-      dimension: c.dimension,
-      path,
-      description: sanitizeDescription(c.description),
-    };
-    if (typeof c.lineRange === 'string' && LINE_RE.test(c.lineRange)) {
-      survivor.lineRange = c.lineRange;
-    }
-    out.push(survivor);
-  }
-  return out;
-}
-
-// sanitizeDescription — pure JS: replace every char outside the safe set
-// [A-Za-z0-9 .,:;()/_'"-] with a space, so an untrusted candidate description
-// can never smuggle control characters or injection punctuation into a reviewer
-// prompt. A missing description becomes ''. (validateCitations helper, LESSON-008)
-function sanitizeDescription(desc) {
-  return String(desc == null ? '' : desc).replace(/[^A-Za-z0-9 .,:;()/_'"-]/g, ' ');
-}
-
-// candidatesByDimension — pure JS: bucket VALIDATED candidates by their reviewer
-// dimension so each reviewer's prompt gets only its own slice. The reflector key
-// is never produced (validateCitations already excludes it). Returns
-// { [dimension]: candidate[] }. (Phase-5 pre-pass wiring helper)
-function candidatesByDimension(validated) {
-  const out = {};
-  for (const c of validated || []) {
-    if (!out[c.dimension]) out[c.dimension] = [];
-    out[c.dimension].push(c);
-  }
-  return out;
-}
-
 // reflectorQuestions — pure JS: collect the user-facing question titles from any
 // reflector finding marked `userFacing`. A non-empty result is the Phase-5 halt.
 // (BR-4 halt #2)
@@ -691,11 +581,10 @@ function sharesRepo(a, b) {
 // would throw); under the test loader `module` is defined so the pure logic is
 // exported for node:test. (REQ-474)
 if (typeof module !== 'undefined') module.exports = {
-  REPOS, VERDICT, TASKS, FINDINGS, CANDIDATES, PRS, TERMINAL, REVIEWER_DIMENSIONS, PANEL_DIMENSIONS,
+  REPOS, VERDICT, TASKS, FINDINGS, PRS, TERMINAL, REVIEWER_DIMENSIONS, PANEL_DIMENSIONS,
   blocked, failed, terminalValue,
   selectEligible, orderByTier,
   dedupeAndRank, dedupeKey, cmp,
-  validateCitations, sanitizeDescription, candidatesByDimension,
   reflectorQuestions, fixedPairs, mergeReverified, panelMembers,
   allMerged, stripVerifyMarkers,
   groupCrossRepoReqs, sharesRepo,
@@ -826,7 +715,7 @@ const ELIGIBILITY = await agent(
     schema: ELIGIBILITY_SCHEMA,
     // Inline-prompted DEFAULT workflow subagent (no agentType) — `agentType` is
     // reserved for true specialists (the explore trio, the 6 reviewers,
-    // task-implementer, kimi-pre-pass). 'pipeline-runner' is the legacy
+    // task-implementer). 'pipeline-runner' is the legacy
     // "run a whole /proceed" doer and would misbehave as a generic IO worker;
     // Preflight is read-only eligibility scoring, so use a default subagent
     // (full tools) driven entirely by the inline prompt. (ethos #6)
@@ -1252,35 +1141,10 @@ function manifestPrompt(id, repos) {
   ].join('\n');
 }
 
-// prePassPrompt — dispatch ONE `kimi-pre-pass` leaf for a single touched repo
-// (the citation-scoping boundary, BR-9). The agent does the gate + worktree diff
-// + redaction + ask-kimi I/O and returns the CANDIDATES schema object; the SCRIPT
-// validates the (untrusted) candidates via validateCitations afterward. The agent
-// never throws — on any gate/key/api miss it returns invoked-aware degraded data
-// (empty candidates), so the panel falls back to candidate-less review. (ADR-8)
-function prePassPrompt(id, repo, worktree, base) {
-  return [
-    `Kimi pre-pass for ${id}, repo ${repo}, worktree ${worktree}.`,
-    `Inputs: repo="${repo}"; worktree (absolute)="${worktree}"; REQ="${id}";`,
-    `base (resolved integration branch ref)="${base}".`,
-    '',
-    'Run your full protocol: source the helpers up front, gate (and explicitly',
-    'require MOONSHOT_API_KEY), diff this worktree vs the base, redact, ask Kimi',
-    'for advisory candidates across the 5 reviewer dimensions, parse stdout',
-    'VERBATIM, and emit telemetry. Return ONLY the CANDIDATES schema object. On',
-    'ANY miss (gate fail, key absent, ask-kimi non-zero) return the degraded',
-    'object with invoked set correctly and candidates: []. Never throw.',
-  ].join('\n');
-}
-
-// reviewPrompt — build one panel member's review prompt. `candidates` is the
-// VALIDATED per-dimension advisory slice from the Kimi pre-pass (already run
-// through validateCitations: `..` rejected, path ∈ changedFiles, description
-// sanitized). It is passed ONLY for the 5 reviewer dimensions — the reflector is
-// always called with `candidates` empty/absent (BR-9). Advisory means advisory:
-// the reviewer must independently CONFIRM or REFUTE each candidate, not trust it.
-function reviewPrompt(id, worktree, member, repo, manifest, candidates) {
-  const advisory = (candidates || []).filter(Boolean);
+// reviewPrompt — build one panel member's review prompt. Reviewers produce their
+// own findings independently (no advisory pre-pass). The reflector dimension is
+// also called via this builder; it gets the userFacing-question instructions.
+function reviewPrompt(id, worktree, member, repo, manifest) {
   const lines = [
     `Phase 5 review for ${id} (${member.dimension}) in worktree ${worktree},`,
     `repo ${repo}. You are READ-ONLY. Review the change set on this branch for`,
@@ -1291,25 +1155,8 @@ function reviewPrompt(id, worktree, member, repo, manifest, candidates) {
     `"${member.dimension}", and a findings[] array. For each finding set`,
     'severity (Critical|Major|Minor|Nit), file, line?, title, detail?,',
     'suggestedFix?, mustFix (true ⇒ blocks merge), userFacing (reflector only:',
-    'true ⇒ a question the human must answer before merge), lessonId?, and',
-    'fromCandidate (true ONLY when the finding confirms one of the advisory',
-    'candidates below; false otherwise — including when there are no candidates).',
+    'true ⇒ a question the human must answer before merge), lessonId?.',
   ];
-  // Advisory candidate block — reviewers only (the reflector never gets one).
-  // The candidates are an UNTRUSTED-origin recall aid that the script already
-  // validated; the reviewer must still verify each against the real diff and may
-  // refute any of them. (ADR-8, BR-9, LESSON-008 anchoring caveat)
-  if (member.dimension !== 'reflector' && advisory.length > 0) {
-    lines.push(
-      '',
-      `Advisory candidates for your ${member.dimension} dimension (a recall aid`,
-      'from a fast pre-pass — NOT verified findings). For EACH, independently',
-      'CONFIRM it against the actual diff (emit a finding with fromCandidate=true)',
-      'or REFUTE it (emit nothing for it). Do NOT trust a candidate on its face,',
-      'and do NOT limit your review to this list — find issues it missed too:',
-      JSON.stringify(advisory),
-    );
-  }
   if (member.dimension === 'reflector') {
     lines.push(
       '',
@@ -1526,8 +1373,7 @@ async function implement(id, P, worktree, tasks) {
 
 // orderByTier() — inlined in the PURE block above (pure; unit-tested via node:test). (REQ-474, ADR-10)
 
-// Phase 5 — Kimi pre-pass (per repo) → parallel review panel → deterministic
-// consolidation. (ADR-7, ADR-8, BR-7, BR-9, BR-10)
+// Phase 5 — parallel review panel → deterministic consolidation. (ADR-7, BR-7)
 //
 // Per touched repo the panel fans out: the reflector + the 5 reviewers run
 // CONCURRENTLY (read-only, so safe — the only writer was Phase 4). Each returns
@@ -1536,18 +1382,6 @@ async function implement(id, P, worktree, tasks) {
 // runs as PURE JS in `dedupeAndRank()`; NO agent is in that loop (BR-7). A
 // reflector `userFacing` finding is a user-answerable halt → RETURN blocked
 // (never throw, ADR-6).
-//
-// BEFORE the panel, one `kimi-pre-pass` leaf runs PER TOUCHED REPO (the citation
-// -scoping boundary): it does gate + diff + redaction + ask-kimi I/O and returns
-// CANDIDATES. The SCRIPT then validates those (untrusted) candidates against the
-// TRUSTED changedFiles via validateCitations (rejects `..`, off-diff paths, bad
-// charsets; sanitizes descriptions) and asserts `candidates.length > 0 ⇒ invoked`
-// — a violation is a ghost-skip, so the candidates are DROPPED and logged. The
-// VALIDATED per-dimension slice is fed into ONLY the 5 reviewers' prompts as an
-// advisory "confirm or refute" aid; the reflector receives NONE (BR-9). If the
-// gate/key is unavailable the agent returns empty candidates and the panel runs
-// candidate-less — today's behavior, gracefully. (OQ-1 GO → wired on, not flagged
-// off.)
 //
 // On resume (`ans` set — the user already answered THIS REQ's reflector
 // question), the reflector halt is SKIPPED: we do not re-ask a question the user
@@ -1577,20 +1411,12 @@ async function verify(id, P, worktree, repos, ans) {
     // prose context, not as a strict contract. (kept schema-validated, ADR-7)
   });
 
-  // Kimi pre-pass per touched repo → VALIDATED advisory candidates, bucketed by
-  // reviewer dimension. This is the ONLY consumer of CANDIDATES; the per-repo map
-  // `advisoryByRepo[repo][dimension] = candidate[]` is consulted when each
-  // reviewer prompt is built (reflector excluded). Degrades to {} per repo when
-  // the gate/key is unavailable. (ADR-8, BR-9)
-  const advisoryByRepo = await runPrePass(id, P, worktree, repos);
-
   // Run the full panel per touched repo. Each repo's reflector + 5 reviewers is
   // ONE parallel() fan-out (single barrier per repo). A failed thunk yields null
   // and is filtered — a dropped reviewer never poisons the consolidation.
   const findingsByRepo = {};
   for (const r of repos) {
     const repoWt = r.worktree || worktree;
-    const byDim = advisoryByRepo[r.repo] || {};
     // parallel([]) is unspecified by the runtime contract and a throw would escape
     // verify() (a throw is NOT a halt — ADR-6); guard the empty panel defensively.
     // PANEL is a fixed 6-member literal today, so this is belt-and-suspenders.
@@ -1601,10 +1427,6 @@ async function verify(id, P, worktree, repos, ans) {
           agent(reviewPrompt(
             id, repoWt, m, r.repo,
             m.dimension === 'architecture' ? MANIFEST : null,
-            // Reviewers get their per-dimension slice; the reflector gets none
-            // (validateCitations already excludes reflector candidates, but the
-            // panelMembers reflector entry would key nothing here anyway). (BR-9)
-            m.dimension === 'reflector' ? null : byDim[m.dimension],
           ), {
             ...P,
             label: `${id} phase5-${r.repo}-${m.dimension}`,
@@ -1681,7 +1503,6 @@ async function verify(id, P, worktree, repos, ans) {
       const r = repos.find((x) => x.repo === repoId) || {};
       const repoWt = r.worktree || worktree;
       const dims = pairs[repoId]; // reviewer dimensions only
-      const byDim = advisoryByRepo[repoId] || {};
       const members = PANEL.filter((m) => m.dimension !== 'reflector' && dims.includes(m.dimension));
       // parallel([]) is unspecified by the runtime contract and a throw here would
       // escape verify() (a throw is NOT a halt — ADR-6); guard the empty fan-out.
@@ -1692,7 +1513,6 @@ async function verify(id, P, worktree, repos, ans) {
             agent(reviewPrompt(
               id, repoWt, m, repoId,
               m.dimension === 'architecture' ? MANIFEST : null,
-              byDim[m.dimension], // reviewer-only re-check keeps its advisory slice (BR-9)
             ), {
               ...P,
               label: `${id} phase5-reverify-${repoId}-${m.dimension}`,
@@ -1724,71 +1544,7 @@ async function verify(id, P, worktree, repos, ans) {
   return true;
 }
 
-// ===========================================================================
-// runPrePass(id, P, worktree, repos) — dispatch the Kimi pre-pass per touched
-// repo, validate the (untrusted) candidates in JS, enforce the ghost-skip
-// assertion, and return a per-repo map of VALIDATED candidates bucketed by
-// reviewer dimension. (ADR-8, BR-9, BR-10, LESSON-008, LESSON-012)
-//
-// One `kimi-pre-pass` leaf per repo is the citation-scoping boundary: its
-// `changedFiles` is the TRUSTED diff of THAT repo's worktree, and a candidate is
-// only forwarded if its path is in that repo's changedFiles. The agent never
-// throws — on a gate/key/api miss it returns invoked-aware degraded data (empty
-// candidates), so a miss degrades the repo to candidate-less review.
-//
-// Per repo:
-//   1. agent('kimi-pre-pass', schema: CANDIDATES) — gate + diff + ask-kimi I/O.
-//   2. GHOST-SKIP ASSERTION: candidates.length > 0 ⇒ invoked. A violation means
-//      the agent claimed candidates without actually invoking ask-kimi (a ghost
-//      -skip wearing a result); DROP every candidate and log it. The script-side
-//      schema assertion replaces the legacy skill-flag dance (LESSON-012).
-//   3. validateCitations(candidates, changedFiles) — the LESSON-008 boundary.
-//   4. candidatesByDimension(validated) — bucket the survivors for the reviewers.
-//
-// Returns { [repo]: { [dimension]: candidate[] } }. A repo with no usable
-// candidates maps to {} (so the reviewers run candidate-less for it).
-async function runPrePass(id, P, worktree, repos) {
-  const advisoryByRepo = {};
-  for (const r of repos) {
-    const repoWt = r.worktree || worktree;
-    const base = `origin/${r.integrationBranch || '<integrationBranch-unresolved>'}`;
-    // The pre-pass leaf returns CANDIDATES (schema-validated). It never throws;
-    // a parallel/agent drop yields null, which we treat as "no candidates".
-    const CAND = await agent(prePassPrompt(id, r.repo, repoWt, base), {
-      ...P,
-      label: `${id} phase5-prepass-${r.repo}`,
-      schema: CANDIDATES,
-      agentType: 'kimi-pre-pass',
-    });
-
-    if (!CAND) { advisoryByRepo[r.repo] = {}; continue; }
-
-    const raw = CAND.candidates || [];
-    // Ghost-skip assertion: candidates without an actual invocation are rejected.
-    if (raw.length > 0 && CAND.invoked !== true) {
-      log(
-        `${id} Phase 5 pre-pass (${r.repo}): ghost-skip — ${raw.length} candidate(s) `
-        + `returned with invoked=false (gateReason=${CAND.gateReason}); dropping them.`,
-      );
-      advisoryByRepo[r.repo] = {};
-      continue;
-    }
-
-    // LESSON-008 boundary: validate the untrusted candidates against the TRUSTED
-    // per-repo changedFiles before any of them reaches a reviewer prompt.
-    const validated = validateCitations(raw, CAND.changedFiles || []);
-    if (validated.length < raw.length) {
-      log(
-        `${id} Phase 5 pre-pass (${r.repo}): dropped ${raw.length - validated.length} `
-        + `candidate(s) failing citation validation (traversal / off-diff / bad path).`,
-      );
-    }
-    advisoryByRepo[r.repo] = candidatesByDimension(validated);
-  }
-  return advisoryByRepo;
-}
-
-// dedupeAndRank(), dedupeKey(), cmp(), validateCitations(), sanitizeDescription(), candidatesByDimension(), reflectorQuestions(), fixedPairs(), mergeReverified(), panelMembers() — inlined in the PURE block above (pure; unit-tested via node:test). (REQ-474, ADR-10)
+// dedupeAndRank(), dedupeKey(), cmp(), reflectorQuestions(), fixedPairs(), mergeReverified(), panelMembers() — inlined in the PURE block above (pure; unit-tested via node:test). (REQ-474, ADR-10)
 
 // Phase 6 — open PR(s) based on the RESOLVED integration branch. ONE IO agent
 // pushes each touched repo's branch and opens its PR against

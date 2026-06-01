@@ -63,6 +63,15 @@ Also check the reverse direction: any `*.sh` in `.adlc/partials/` that does NOT 
 
 If `.adlc/partials/` does not exist at all in the consumer project, report every toolkit partial as `missing` and recommend running `/init`.
 
+### Step 3a: Detect Stale Salesforce Quality Checklist
+
+`partials/sf-quality-checklist.md` is the always-on baseline that the implementer and review panel source. It is generated from `.adlc/context/salesforce-rules.md` (the source of truth). Drift between the two is a posture risk — the linter and the agents read the partial; if it's stale relative to the rules document, an enforced rule may not actually be enforced.
+
+For consumer projects:
+
+- If `.adlc/partials/sf-quality-checklist.md` exists, treat it as a partial drift candidate per Step 3 (any drift is `stale` — partials have no customization classification).
+- If `.adlc/context/salesforce-rules.md` exists in the consumer but `partials/sf-quality-checklist.md` does NOT (in either consumer or toolkit), surface a one-line note that the consumer's rules document is unwired from the always-on baseline.
+
 ### Step 3b: Detect Stale Workflow Test Files (Jest landmine)
 
 A third sync surface is `.adlc/workflows/`. The current `/init` policy vendors **only** the runtime files (`adlc-sprint.workflow.js` + `README.md`) and deliberately does **not** copy the toolkit's `workflows/tests/` directory. Those are `node:test` unit tests (CommonJS `require('node:test')`) for the inlined pure helpers — toolkit-internal, with no purpose in a consumer repo.

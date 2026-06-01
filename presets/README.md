@@ -1,45 +1,42 @@
 # Presets
 
-Stack-shaped starter configs for `.adlc/config.yml`. Each preset captures a common combination of platforms, deploy targets, and CI patterns. Pick the one closest to your stack, copy it into your repo, and replace the placeholder values.
+Stack-shaped starter configs for `.adlc/config.yml`. Each preset captures a common combination of Salesforce surface areas, deploy targets, and CI patterns. Pick the one closest to your scope, copy it into your repo, and replace the placeholder values.
 
 ## Available presets
 
-| File | Stack |
+| File | Scope |
 |------|-------|
-| [ios-firebase-cloudrun.yml](ios-firebase-cloudrun.yml) | iOS app + Firebase (Auth/Firestore) + Cloud Run backend(s), GitHub Actions CI/CD with staging-first promotion |
+| [sfdc-core.yml](sfdc-core.yml) | Apex + LWC + Flow + SOQL + Permissions + Deploy. The right baseline for most Salesforce projects. |
+| [sfdc-industries.yml](sfdc-industries.yml) | sfdc-core plus Data Cloud, Agentforce, OmniStudio, Industries CME EPC, and Vlocity build/deploy. Trim the `industries:` list to what's actually in scope. |
 
 ## How to use a preset
 
 From inside the repo where you're running `/init`:
 
 ```bash
-cp ~/.claude/skills/presets/ios-firebase-cloudrun.yml .adlc/config.yml
+cp ~/.claude/skills/presets/sfdc-core.yml .adlc/config.yml
 $EDITOR .adlc/config.yml
 ```
 
-Replace every `<placeholder>` with a real value (project name, GCP project IDs, repo paths, device names). Don't leave placeholders in — skills will fail loudly when they try to use them, but it's faster to just fill them in up front.
+Replace every `<placeholder>` with a real value (project name, app prefix, sf CLI org aliases, package directories). Don't leave placeholders in — skills will fail loudly when they try to use them, but it's faster to just fill them in up front.
 
 ## What's a preset, exactly
 
-A preset is **stack shape, not company configuration**. It declares:
+A preset is **scope shape, not org configuration**. It declares:
 
-- Which platforms are in play (`stack.frontends: [ios]`, `stack.backends: [cloud-run]`)
-- Which sections are populated (e.g., `ios:` and `gcp:` blocks present, with placeholder values)
-- Sensible defaults (e.g., `gcp.default_region: us-central1`, `ios.derived_data_clean: true`)
-- Example shape for the `services:` block
+- Which Salesforce surface areas are in play (`industries: [datacloud, agentforce, omnistudio, cme]`)
+- Which sections are populated (e.g., `agentforce_variant`, `agentforce_test_specs` when Agentforce is in scope)
+- Sensible defaults (e.g., `api_version: "66.0"` for Agentforce-enabled presets, `package_directories: ["force-app"]`)
+- Example shape for the `repos:` and `orgs:` blocks
 
 It does **not** contain:
 
-- Real project IDs, repo names, account IDs, secrets
-- Specific device names — leave those as placeholder strings
-- Anything proprietary to a specific company's setup
+- Real org IDs, sandbox URLs, sf CLI auth tokens, secrets
+- Specific app prefixes or package names — leave those as placeholder strings
+- Anything proprietary to a specific company's Salesforce setup
 
 ## Adding a new preset
 
-If you have a stack combination not covered here, drop a new YAML file in this directory and update the table above. Naming convention: `<frontend>-<auth-or-data-layer>-<backend-platform>.yml`. Examples:
+If you have a Salesforce scope combination not covered here (e.g., MuleSoft-only, Marketing Cloud, Salesforce-with-Heroku-microservice), drop a new YAML file in this directory and update the table above. Naming convention: `sfdc-<scope>.yml` or `sfdc-<scope>-<sibling-tech>.yml`.
 
-- `web-supabase-vercel.yml`
-- `mobile-rn-firebase-aws.yml`
-- `none-postgres-k8s.yml`
-
-Open a PR against the canonical `adlc-toolkit` upstream — presets benefit from being shared.
+Open a PR against the canonical toolkit — presets benefit from being shared.

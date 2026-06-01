@@ -19,9 +19,10 @@ So the engine is **ONE self-contained file** — there are no sibling `schemas.j
 
    ```js
    // ==== BEGIN PURE ====
-   <the 7 JSON-Schema literals + REVIEWER_DIMENSIONS, inlined>
-   <every pure helper: validateCitations, dedupeAndRank, selectEligible,
-    orderByTier, groupCrossRepoReqs, blocked/failed, …>
+   <the JSON-Schema literals + REVIEWER_DIMENSIONS, inlined>
+   <every pure helper: dedupeAndRank, selectEligible, orderByTier,
+    groupCrossRepoReqs, reflectorQuestions, fixedPairs, mergeReverified,
+    panelMembers, allMerged, stripVerifyMarkers, blocked/failed, …>
    if (typeof module !== 'undefined') module.exports = { /* every name above */ };
    // ==== END PURE ====
    ```
@@ -45,7 +46,7 @@ the sentinel-delimited section with the runtime globals absent.
 |------|------|
 | `adlc-sprint.workflow.js` | The `adlc-sprint` engine — ONE self-contained file: `meta` first, the inlined PURE block (schemas + helpers behind the sentinels), then the control-flow orchestration that dispatches `agent()` leaves for all I/O. Runs only inside the Workflow runtime. |
 | `tests/_load-pure.js` | Reusable `vm` loader: reads the `// ==== BEGIN/END PURE ====` section of a self-contained workflow script and evaluates it with the runtime globals absent, returning its `module.exports` so `node:test` can cover the pure logic with no build step. |
-| `tests/helpers.test.js` | `node:test` unit tests for the inlined pure helpers (the LESSON-008 citation boundary, the BR-7 consolidation gate, the BR-12 max-5 bound, cross-REQ merge grouping), loaded via `_load-pure.js`. Run: `node --test 'workflows/tests/*.test.js'`. See [`tests/README.md`](tests/README.md). |
+| `tests/helpers.test.js` | `node:test` unit tests for the inlined pure helpers (the BR-7 consolidation gate, the BR-12 max-5 bound, cross-REQ merge grouping), loaded via `_load-pure.js`. Run: `node --test 'workflows/tests/*.test.js'`. See [`tests/README.md`](tests/README.md). |
 
 ## How `workflows/` is reached (no install change)
 
