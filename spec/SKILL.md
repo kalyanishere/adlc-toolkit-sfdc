@@ -156,11 +156,28 @@ Run a weighted-score retrieval over three corpora using the query from Step 1.5.
    If the scan finds nothing (genuinely first REQ across all repos), `HIGHEST` is empty — REQ_NUM defaults to 1.
 4. The `mkdir` lock ensures that concurrent `/sprint` sessions don't read the same counter value. `mkdir` is atomic on all POSIX filesystems — if another process holds the lock, the retry loop waits up to ~5 seconds.
 
+### Step 2.5: Pick the complexity tier (REQ-C)
+
+Before writing the spec, classify the work into one of `trivial | small | medium | large`. This drives `/proceed`'s phase shape — the wrong tier either wastes hours of orchestration or skips genuinely-needed gates.
+
+Apply this heuristic to the user's feature description plus any retrieval signal:
+
+| Tier | Pick when |
+|---|---|
+| `trivial` | Single-file metadata change (picklist value, layout tweak, perm-set toggle, label edit). No Apex / Flow / LWC code change. No architectural decision. Author is confident from the description alone. |
+| `small` | ≤3 files. No new pattern introduced. Existing trigger handler / existing perm-set / existing sObject. 1 LWC + 1 Apex controller; or 1 Flow; or 1 perm-set spanning ≤2 objects. |
+| `medium` | 4-10 files OR introduces a new pattern (new trigger handler, new Named Credential, new custom sObject, first-time external service integration). |
+| `large` | >10 files OR cross-domain (Data Cloud + Apex + Agentforce, multi-repo, OmniStudio + Apex callable, B2B Commerce store). Always includes an ADR. |
+
+Set `complexity:` in the spec's frontmatter. When in doubt, pick the **higher** tier — over-classifying costs minutes of orchestration; under-classifying can ship bad code.
+
+In **interactive mode**, surface the proposed tier and let the user override. In **non-interactive / pipeline mode** (caller passed an explicit value, or running inside a subagent), accept the caller's value verbatim; if absent, use `small` as the safe default.
+
 ### Step 3: Create the Requirement Spec
 1. Create directory: `.adlc/specs/REQ-xxx-feature-slug/`
 2. Create `requirement.md` using the template from `.adlc/templates/requirement-template.md`
 3. Fill in all sections:
-   - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., iOS-only or docs-only), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags`. This self-tagging makes the new REQ retrievable for future `/spec` invocations (per REQ-258 BR-7).
+   - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., iOS-only or docs-only), `complexity` (from Step 2.5), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags`. This self-tagging makes the new REQ retrievable for future `/spec` invocations (per REQ-258 BR-7).
    - **Description**: What the feature does and why — be specific and grounded in the project context
    - **System Model**: Structured data model — Entities (fields, types, constraints), Events (triggers, payloads), Permissions (actions, roles). Remove sub-sections that don't apply to this feature.
    - **Business Rules**: Explicit, testable constraints governing behavior (e.g., "Only item owner can delete"). Numbered BR-1, BR-2, etc.

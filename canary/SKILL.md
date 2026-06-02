@@ -69,21 +69,95 @@ sf org display --target-org "$ALIAS" --json | jq -r '.result.username, .result.i
 
 Surface the username + instance URL to the user before any deploy/validate. If the alias does not resolve, halt.
 
-### Step 2: Validate (mandatory — never skipped)
+### Step 2a: Local pre-flight (REQ-B + REQ-F)
 
-Run `sf project deploy validate` against the target org. This is a server-side no-op deploy that catches every error without writing changes:
+Before paying for a server-side `sf project deploy validate`, run two local pre-flight passes. Each takes seconds; together they catch the entire class of FLS / cross-reference / missing-field-in-org errors that otherwise burn 60-90s per validate round-trip.
+
+**Pass 1 — perm-set FLS (REQ-B)** — queries the org's `FieldDefinition` (Tooling API) and validates every `<fieldPermissions>` entry against the FLS-eligibility rules (required, formula, master-detail, auto-number, missing-from-org).
 
 ```sh
+sh tools/sf-preflight/check.sh permsets \
+  --workspace force-app \
+  --target-org "$ALIAS"
+```
+
+Skip this pass only when the diff has no perm-set / perm-set-group XML.
+
+**Pass 2 — generalized metadata cross-reference (REQ-F)** — workspace-internal check. Catches perm-sets referencing missing Apex classes / apps / tabs / record types, layouts referencing missing custom fields, and FlexiPages referencing unknown sObjects.
+
+```sh
+sh tools/sf-preflight/check.sh metadata --workspace force-app
+```
+
+This pass requires no org access, so always run it.
+
+If either pre-flight pass exits non-zero (BLOCK findings), **STOP** — surface the findings verbatim and refuse to call `sf project deploy validate`. Each finding is actionable. The user fixes the metadata and re-runs `/canary`. WARN-level findings (e.g., unknown-object heuristic, missing-custom-field on a layout) surface in the report but do not block — they're often false positives on cross-package deploys.
+
+### Step 2b: Resolve `--test-level` from the diff (REQ-D)
+
+`--test-level RunLocalTests` runs every Apex test in the org. For metadata-only changes (perm-sets, layouts, LWC bundles, Flows without Apex callouts) that's pure waste — often 5-10 minutes per validate against a mature org. Pick the cheapest level that still surfaces real regressions, with the floor lifting per environment.
+
+```sh
+BASE="${BASE_REF:-origin/main}"
+APEX_TOUCHED=$(git diff --name-only "$BASE...HEAD" 2>/dev/null \
+  | grep -E '\.(cls|trigger)$' || true)
+APEX_NONTEST=$(echo "$APEX_TOUCHED" | grep -vE '(Test|_Test)\.cls$' || true)
+HAS_APEX=$( [ -n "$APEX_NONTEST" ] && echo 1 || echo 0 )
+```
+
+Decision matrix:
+
+| Environment | Apex in diff? | `--test-level` | Tests run via `--tests` |
+|---|---|---|---|
+| `sandbox` | no | `NoTestRun` | (none) |
+| `sandbox` | yes | `RunSpecifiedTests` | derived list (below) |
+| `staging` | no | `RunSpecifiedTests` | smoke tests from `.adlc/config.yml` `salesforce.smoke_tests` (if set), else `RunLocalTests` |
+| `staging` | yes | `RunLocalTests` | n/a |
+| `prod` | any | `RunLocalTests` | n/a (production-equivalent) |
+
+**Deriving the test list** when `RunSpecifiedTests` is selected with Apex in the diff:
+
+```sh
+# For each touched non-test class, list candidate test classes by the standard
+# *Test / _Test / Test_ naming conventions. Always include any explicitly
+# changed *Test.cls so a fix to the test itself runs.
+TESTS=""
+for f in $APEX_NONTEST; do
+  base=$(basename "$f" .cls)
+  for cand in "${base}Test" "${base}_Test" "Test_${base}"; do
+    if find force-app -type f -name "${cand}.cls" 2>/dev/null | grep -q .; then
+      TESTS="$TESTS $cand"
+    fi
+  done
+done
+TESTS="$TESTS $(echo "$APEX_TOUCHED" | grep -E '(Test|_Test)\.cls$' \
+  | sed 's|.*/||;s|\.cls$||' | tr '\n' ' ')"
+TESTS=$(echo "$TESTS" | tr -s ' ' '\n' | sort -u | tr '\n' ' ')
+```
+
+If `TESTS` is empty after derivation despite `HAS_APEX=1` (e.g., a brand-new class with no test yet), **fall back to `RunLocalTests`** rather than running zero tests — a class with no test class will be caught by REQ-A's coverage gate but the deploy still needs *something* to run against it.
+
+Persist the resolved level into `.adlc/.cache/canary-test-level-<env>.txt` so Step 3 reuses it.
+
+### Step 2: Validate (mandatory — never skipped)
+
+Run `sf project deploy validate` against the target org with the test level resolved in Step 2b:
+
+```sh
+TEST_LEVEL=$(cat ".adlc/.cache/canary-test-level-${ENV}.txt")
+TEST_FLAGS="--test-level $TEST_LEVEL"
+[ "$TEST_LEVEL" = "RunSpecifiedTests" ] && TEST_FLAGS="$TEST_FLAGS --tests $TESTS"
+
 sf project deploy validate \
   --target-org "$ALIAS" \
-  --test-level RunLocalTests \
+  $TEST_FLAGS \
   --wait 60 \
   --json
 ```
 
 Capture the result. **Always extract the validation id** (`.result.id` in the JSON response) and surface it in the report — for prod runs this id IS the artifact the user needs for the manual deploy step. On any failure (compilation error, test failure, governor-limit failure, missing dependency), STOP — do not proceed. Surface the full error report from `--json` output.
 
-`--test-level RunLocalTests` runs every test in the package directories, which is the Salesforce-default for production-equivalent validation. For sandboxes the user may pass `--test-level RunSpecifiedTests` if the project's CI does that already; honor whatever the project's CI config in `.github/workflows/*` declares.
+`RunLocalTests` is the Salesforce-default for production-equivalent validation; the diff-aware policy above is what makes the sandbox round-trip cheap. The project's CI config in `.github/workflows/*` may override the staging or prod entries — honor it when present.
 
 ### Step 3: Deploy (sandbox / staging only — prod ALWAYS halts at validate)
 
@@ -91,12 +165,16 @@ Capture the result. **Always extract the validation id** (`.result.id` in the JS
 
 #### Step 3a — sandbox / staging: run the deploy
 
-If validate passes AND target is `sandbox` or `staging`, run the actual deploy:
+If validate passes AND target is `sandbox` or `staging`, run the actual deploy. Reuse the resolved test level from Step 2b — running a different (heavier) set at deploy time would invalidate Step 2's promise:
 
 ```sh
+TEST_LEVEL=$(cat ".adlc/.cache/canary-test-level-${ENV}.txt")
+TEST_FLAGS="--test-level $TEST_LEVEL"
+[ "$TEST_LEVEL" = "RunSpecifiedTests" ] && TEST_FLAGS="$TEST_FLAGS --tests $TESTS"
+
 sf project deploy start \
   --target-org "$ALIAS" \
-  --test-level RunLocalTests \
+  $TEST_FLAGS \
   --wait 120 \
   --json
 ```
@@ -175,7 +253,7 @@ If `playwright_specs:` is absent OR the directory is empty, skip this step silen
 
 `prod` policy: never run Playwright specs that mutate org state against the prod alias. Specs marked `@prod-safe` (read-only smoke: load page, assert selector, log out) MAY run; everything else is filtered out via `--grep "@prod-safe"` when `$ENV == prod`. Specs that don't carry the tag are skipped with a one-line note in the report.
 
-### Step 5: Verify
+### Step 5: Verify (three-tier coverage policy — REQ-A)
 
 After deploy + smoke gate, run a final verification:
 
@@ -183,11 +261,56 @@ After deploy + smoke gate, run a final verification:
 # Confirm the deployed code matches what we built locally — list the latest deploy
 sf project deploy report --target-org "$ALIAS" --json | jq '.result.status'
 
-# Confirm a representative test still passes (smoke for non-Agentforce projects)
-sf apex run test --target-org "$ALIAS" --test-level RunLocalTests --wait 10 --code-coverage --result-format json
+# Capture full coverage data from the org
+sf apex run test --target-org "$ALIAS" --test-level RunLocalTests --wait 10 \
+  --code-coverage --result-format json > .adlc/.cache/coverage-$ALIAS.json
 ```
 
-Capture coverage. salesforce-rules.md mandates ≥75% — if coverage drops below the floor, flag it as a finding and recommend additional tests before promoting further.
+**Read the coverage policy from `.adlc/config.yml`** (defaults shown):
+
+```sh
+MODE=$(awk '/^[[:space:]]*coverage:/{f=1} f && /^[[:space:]]*mode:/{print $2; exit}' .adlc/config.yml | tr -d '"')
+ORG_FLOOR=$(awk '/^[[:space:]]*coverage:/{f=1} f && /^[[:space:]]*org_floor:/{print $2; exit}' .adlc/config.yml)
+ORG_TARGET=$(awk '/^[[:space:]]*coverage:/{f=1} f && /^[[:space:]]*org_target:/{print $2; exit}' .adlc/config.yml)
+CLASS_FLOOR=$(awk '/^[[:space:]]*coverage:/{f=1} f && /^[[:space:]]*class_floor:/{print $2; exit}' .adlc/config.yml)
+MODE=${MODE:-brownfield}
+ORG_FLOOR=${ORG_FLOOR:-75}
+ORG_TARGET=${ORG_TARGET:-80}
+CLASS_FLOOR=${CLASS_FLOOR:-75}
+```
+
+**Apply the policy:**
+
+1. **Org-level (always)** — extract org coverage from the test run summary:
+   ```sh
+   ORG_COV=$(jq '.result.summary.testRunCoverage' .adlc/.cache/coverage-$ALIAS.json | tr -d '%')
+   ```
+   - `ORG_COV < ORG_FLOOR` → **BLOCK** promotion. Critical: org coverage breaches the platform/policy minimum.
+   - `ORG_FLOOR ≤ ORG_COV < ORG_TARGET` → **WARN** but allow. Major: org below project target. Surface in the report; do not auto-promote past staging until a follow-up REQ pushes it above target.
+   - `ORG_COV ≥ ORG_TARGET` → **PASS** the org-level gate.
+
+2. **Per-class (brownfield mode only)** — for each Apex class in the diff:
+   ```sh
+   if [ "$MODE" = "brownfield" ]; then
+     CHANGED=$(git diff --name-only "origin/$BASE...HEAD" | grep -E '\.cls$' | grep -vE '(Test|_Test)\.cls$' \
+       | sed 's|.*/||;s|\.cls$||' | sort -u)
+     [ -z "$CHANGED" ] && echo "no Apex classes changed — skipping per-class gate" && return
+     QUOTED=$(echo "$CHANGED" | awk '{printf "%s'\''%s'\''", sep, $0; sep=","}')
+     sf data query --use-tooling-api --target-org "$ALIAS" --json \
+       --query "SELECT ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered \
+                FROM ApexCodeCoverageAggregate \
+                WHERE ApexClassOrTrigger.Name IN ($QUOTED)"
+   fi
+   ```
+   For each row, compute `pct = NumLinesCovered * 100 / (NumLinesCovered + NumLinesUncovered)`.
+   - `pct < CLASS_FLOOR` → **BLOCK** promotion. Critical: class coverage breaches policy.
+   - `pct ≥ CLASS_FLOOR` → pass.
+
+3. **Greenfield mode** — skip step 2 entirely; emit per-class numbers as informational only.
+
+4. **`diff_only: true`** — replace the per-class query with a per-line `ApexCodeCoverage` query restricted to the changed line ranges. Implementation note: this requires parsing `git diff -U0` for hunk line numbers and intersecting with the `Coverage` field's `coveredLines`/`uncoveredLines` arrays. Defer to a follow-up REQ if the project has not opted in.
+
+**Surface the result** in the canary report — see the Coverage block in `## Output`.
 
 ### Step 6: Record state
 
@@ -254,8 +377,12 @@ Org: <username> (<instance URL>)
 - Trace artifacts: reports/playwright/<env>/
 - Result: ✓ clean
 
-### Verification
-- Apex coverage: 78.4% (≥ 75% ✓)
+### Verification — coverage (three-tier policy)
+- Mode: <greenfield | brownfield>
+- Org coverage: NN.N%  (org_target NN, org_floor NN — ✓ pass | ⚠ warn | ✗ block)
+- Per-changed-class (brownfield only):
+  - <ClassName1>: NN.N%  (class_floor NN — ✓/✗)
+  - <ClassName2>: NN.N%  (class_floor NN — ✓/✗)
 - Final org status: <status>
 
 Next step: <auto-promoted to staging | run `/canary prod` | halted because of <reason>>

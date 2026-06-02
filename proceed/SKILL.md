@@ -32,6 +32,10 @@ For everything else — including every **End-of-phase log** block below, every 
 
 !`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
 
+## Context
+
+- SF quality checklist: !`cat .adlc/partials/sf-quality-checklist.md 2>/dev/null || cat ~/.claude/skills/partials/sf-quality-checklist.md 2>/dev/null || echo "No sf-quality-checklist found"`
+
 ## Arguments
 
 The user provides a requirement ID, e.g., `/proceed REQ-023` or `/proceed 23`.
@@ -88,6 +92,32 @@ merge_order:
 - **Touched repo** — any repo (primary or sibling) that has at least one task in this REQ.
 - **Repo worktree** — `<repo-path>/.worktrees/REQ-xxx` for each touched repo, on branch `feat/REQ-xxx-short-description` (same branch name across repos).
 
+## Complexity-aware phase shape (REQ-C)
+
+Read `complexity:` from the REQ frontmatter (`.adlc/specs/REQ-xxx-*/requirement.md`). It's one of `trivial | small | medium | large`. If absent, default to `small`. The tier picks how much orchestration to spend — the *gates* below stay safe in every tier; only the *fan-out* changes.
+
+| Phase | trivial | small | medium | large |
+|---|---|---|---|---|
+| Phase 1 (validate spec) | skip — trust author's frontmatter | inline single-pass check | full /validate | full /validate |
+| Phase 2 (architect) | inline (no explore agents, no architecture.md) | inline (no explore agents) | full /architect (3-agent fan-out) | full /architect + ADR capture |
+| Phase 3 (validate tasks) | skip | inline check | full /validate | full /validate |
+| Phase 4 (implement) | direct in-context — no task-implementer dispatch | task-implementer per task | task-implementer per task | task-implementer per task |
+| Phase 5 (verify) | reflector only | reflector + quality-reviewer (2 agents) | full 6-agent panel | full 6-agent panel + re-verify |
+| Phase 5 re-verify | skip | skip | conditional (if Critical fixed) | conditional |
+| Phase 6 (PR) | normal | normal | normal | normal |
+| Phase 7 (CI) | normal | normal | normal | normal |
+| Phase 8 (wrapup) | normal | normal | normal | normal |
+| Canary ladder | sandbox-only | sandbox + staging | full ladder | full ladder |
+
+**Hard rules that apply at every tier (do not skip):**
+- Worktree isolation (Step 0) — always.
+- `pipeline-state.json` writes — always.
+- Local pre-flight gates (REQ-B perm-set FLS, REQ-F generalized metadata) — always when applicable metadata is in the diff.
+- Coverage policy gate (REQ-A) — always; only the verbosity changes by tier.
+- Three legitimate halt points in the Autonomous Execution Contract — always.
+
+Record the resolved tier at the top of the run log: `Complexity: <tier> — phase shape: <summary>`. Persist it in `pipeline-state.json` as `complexity: "<tier>"` so a resumed run uses the same shape.
+
 ## The Pipeline
 
 Execute these phases in order. Each phase has a validation gate — if validation fails, fix the issues and re-validate. Loop up to 3 times per gate; if still failing after 3 attempts, stop and present the remaining issues to the user.
@@ -103,6 +133,7 @@ Execute these phases in order. Each phase has a validation gate — if validatio
 {
   "req": "REQ-xxx",
   "branch": "feat/REQ-xxx-short-description",
+  "complexity": "small",
   "startedAt": "2026-03-27T10:00:00Z",
   "completed": false,
   "currentPhase": 0,
@@ -303,16 +334,29 @@ log: one line per tier with finished `TASK-xxx [repo] ✓` and any failures.
 
 **Main conversation mode** — parallel agents:
 
-**Step A — Single-gate parallel dispatch**. This whole step is ONE gate. In cross-repo mode, dispatch **6 agents × N touched repos** — all in a **single assistant message**. In single-repo mode, dispatch **6 agents** in a single message as before. Do NOT report findings, do NOT pause, do NOT log progress between agent returns — wait until all have returned, then consolidate in Step B.
+**Step A — Single-gate parallel dispatch (complexity-aware, REQ-C)**. This whole step is ONE gate. The agent set scales with `pipeline-state.json`'s `complexity`:
+
+| complexity | Agents dispatched per touched repo |
+|---|---|
+| `trivial` | reflector |
+| `small` | reflector + quality-reviewer |
+| `medium` | reflector + correctness-reviewer + quality-reviewer + architecture-reviewer + test-auditor + security-auditor (full 6) |
+| `large` | full 6 (same as medium) |
+
+Dispatch all selected agents in a **single assistant message**. In cross-repo mode, multiply by N touched repos. Do NOT report findings, do NOT pause, do NOT log progress between agent returns — wait until all have returned, then consolidate in Step B.
 
 The six agents match the dimensions covered by `/review` (correctness, quality, architecture, test coverage, security) plus the reflector self-assessment. Each reviewer is responsible for producing its own candidate findings — there is no advisory pre-pass.
 
-1. **reflector** agent — provide REQ-xxx, the repo id, the worktree path, changed files, diff, conventions.md, architecture.md. Tell it: "Report findings only. The parent pipeline will apply fixes."
-2. **correctness-reviewer** agent — repo id, worktree path, changed files, diff, conventions.md. "Report findings only. Do not apply fixes."
+**Inline-context rule (REQ-E)**: every agent below receives the **content** of `conventions.md`, `architecture.md`, and (when relevant) `salesforce-rules.md` inlined into its prompt — not file paths. Step 0 already loaded these into your context; pass them through. Avoiding per-agent re-reads saves ~3-5s per agent per phase (≈ 1-2 min/run on the full 6-agent panel).
+
+Each agent dispatch prompt should include a `## Project context (verbatim)` block with the markdown bodies, followed by the agent-specific instructions.
+
+1. **reflector** agent — provide REQ-xxx, the repo id, the worktree path, changed files, diff, **inlined `conventions.md` + `architecture.md` content**. Tell it: "Report findings only. The parent pipeline will apply fixes."
+2. **correctness-reviewer** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content**. "Report findings only. Do not apply fixes."
 3. **quality-reviewer** agent — same inputs. "Report findings only. Do not apply fixes."
-4. **architecture-reviewer** agent — repo id, worktree path, changed files, diff, architecture.md, **plus a summary of the other touched repos' changes** (so it can flag cross-repo contract breaks). "Report findings only. Do not apply fixes."
-5. **test-auditor** agent — repo id, worktree path, changed files, diff, conventions.md. "Audit test coverage only for the diff under review. Report findings only. Do not apply fixes."
-6. **security-auditor** agent — repo id, worktree path, changed files, diff, conventions.md. "Audit security posture only for the diff under review. Report findings only. Do not apply fixes."
+4. **architecture-reviewer** agent — repo id, worktree path, changed files, diff, **inlined `architecture.md` content**, **plus a summary of the other touched repos' changes** (so it can flag cross-repo contract breaks). "Report findings only. Do not apply fixes."
+5. **test-auditor** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content + `.adlc/config.yml` `salesforce.coverage` block**. "Audit test coverage only for the diff under review. Apply the three-tier policy in REQ-A. Report findings only. Do not apply fixes."
+6. **security-auditor** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content + `salesforce-rules.md` content (Security & Permissions sections)**. "Audit security posture only for the diff under review. Report findings only. Do not apply fixes."
 
 **Subagent mode** — sequential inline review:
 For each touched repo, run the reflector checklist, then correctness, quality, architecture (with cross-repo context), test-auditor, and security-auditor checklists sequentially in your own context. Use the criteria from the agent definitions in `~/.claude/agents/`. Do NOT dispatch sub-agents.

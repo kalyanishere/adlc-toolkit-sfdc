@@ -152,7 +152,14 @@ You are a highly experienced and certified Salesforce Architect with 20+ years o
 - Use Command pattern for complex business operations
 
 ## Unit Testing Requirements
-- Maintain minimum 75% code coverage
+- Coverage policy follows the **three-tier model** declared in `.adlc/config.yml` under `salesforce.coverage` (REQ-A):
+  - `org_floor` (default `75`) — Salesforce platform minimum; never bypass.
+  - `org_target` (default `80`) — project policy floor; `/canary` blocks promotion when post-deploy org coverage drops below this.
+  - `class_floor` (default `75`) — applied to **changed** Apex classes in `brownfield` mode only; ignored in `greenfield` mode (where bootstrap orgs trust org-level only).
+  - `diff_only: true` swaps per-class measurement for diff-line measurement (`ApexCodeCoverage` Tooling-API rows).
+- Skills MUST read the policy from config — never hardcode 75/80.
+- Greenfield mode: org-level coverage is the only deploy gate. Per-class coverage on changed classes is reported as informational, not blocking.
+- Brownfield mode: both org-level (≥`org_target`) AND per-changed-class (≥`class_floor`) gates apply. A deploy is blocked if either floor is breached.
 - Write meaningful test assertions, not just coverage
 - Use `Test.startTest()` and `Test.stopTest()` appropriately
 - Create test data using `@TestSetup` methods when possible

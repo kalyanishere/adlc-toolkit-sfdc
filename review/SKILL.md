@@ -18,6 +18,7 @@ This skill is the **pre-push ADLC review gate**. It runs 5 specialized review ag
 
 - Current branch: !`git branch --show-current 2>/dev/null || echo "Not a git repo"`
 - Recent changes: !`git diff main --stat 2>/dev/null || echo "No diff available"`
+- SF quality checklist: !`cat .adlc/partials/sf-quality-checklist.md 2>/dev/null || cat ~/.claude/skills/partials/sf-quality-checklist.md 2>/dev/null || echo "No sf-quality-checklist found"`
 
 **Context files loaded on demand**: `.adlc/context/conventions.md` and recent lessons are loaded by Step 1 below — **skip the Reads if they are already in the current conversation** (e.g., when invoked from `/proceed`, which preloads `conventions.md` at Phase 0).
 
@@ -52,11 +53,13 @@ Read the complete current version of every changed file (not just the diff) to u
 ### Step 3: Launch Review Agents
 Launch **5 formal review agents in parallel** using the Agent tool. Each agent is defined in `~/.claude/agents/` with its full checklist, model selection, and tool restrictions. Running in parallel minimizes wall-clock time.
 
-1. **correctness-reviewer** agent — provide it the list of changed files, the full diff, `conventions.md` content, and recent lessons. Focus: logic errors, null risks, race conditions, edge cases, concurrency bugs. Tell it: "Report findings only. Do not apply fixes."
+**Inline-context rule (REQ-E)**: pass the **content** of `conventions.md`, `architecture.md`, the loaded lessons, and (when relevant) `salesforce-rules.md` and `.adlc/config.yml` `salesforce.coverage` block as an inline `## Project context (verbatim)` section in each agent's prompt — never just paths. Step 1 already loaded these; passing content avoids 5 redundant re-reads (~15-25s saved per /review run).
+
+1. **correctness-reviewer** agent — provide it the list of changed files, the full diff, **inlined `conventions.md` content**, and **inlined recent lessons**. Focus: logic errors, null risks, race conditions, edge cases, concurrency bugs. Tell it: "Report findings only. Do not apply fixes."
 2. **quality-reviewer** agent — same inputs. Focus: naming, convention compliance, code duplication, complexity, maintainability. Tell it: "Report findings only. Do not apply fixes."
-3. **architecture-reviewer** agent — same inputs plus `architecture.md` content. Focus: layering, separation of concerns, API contracts, module boundaries, scope discipline. Tell it: "Report findings only. Do not apply fixes."
-4. **test-auditor** agent — same inputs. Focus: test coverage gaps for the changed code, mock completeness, edge case coverage, test isolation, determinism. Tell it: "Audit test coverage only for the diff under review. Report findings only. Do not apply fixes."
-5. **security-auditor** agent — same inputs. Focus: input validation, authentication/authorization gaps, data exposure (PII, secrets), injection risks, dependency issues, rate limiting. Tell it: "Audit security posture only for the diff under review. Report findings only. Do not apply fixes."
+3. **architecture-reviewer** agent — same inputs plus **inlined `architecture.md` content**. Focus: layering, separation of concerns, API contracts, module boundaries, scope discipline. Tell it: "Report findings only. Do not apply fixes."
+4. **test-auditor** agent — same inputs plus **inlined `.adlc/config.yml` `salesforce.coverage` block** (so it applies REQ-A's three-tier policy). Focus: test coverage gaps for the changed code, mock completeness, edge case coverage, test isolation, determinism. Tell it: "Audit test coverage only for the diff under review. Report findings only. Do not apply fixes."
+5. **security-auditor** agent — same inputs plus **inlined `salesforce-rules.md` Security & Permissions sections**. Focus: input validation, authentication/authorization gaps, data exposure (PII, secrets), injection risks, dependency issues, rate limiting. Tell it: "Audit security posture only for the diff under review. Report findings only. Do not apply fixes."
 
 Each agent returns structured findings with severity (Critical/Major/Minor/Nit), file path, line number, and suggested fix.
 

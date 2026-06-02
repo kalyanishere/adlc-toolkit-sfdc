@@ -81,6 +81,40 @@ salesforce:
     # default. Read by generating-lwc-components, building-ui-bundle-app,
     # generating-ui-bundle-metadata, and the /spec + /architect skills.
     ui_bundles: false
+  # ---------------------------------------------------------------------------
+  # coverage — Three-tier Apex coverage policy (REQ-A).
+  # ---------------------------------------------------------------------------
+  # mode:
+  #   greenfield — org is bootstrapping; only org-level coverage gates deploys.
+  #                Per-class coverage on changed classes is informational only.
+  #   brownfield — established org; both org-level AND per-changed-class
+  #                coverage gate deploys. (default)
+  # org_floor    — Salesforce platform minimum (75). Never lower this.
+  # org_target   — project policy floor. Org coverage must stay at/above this
+  #                after a deploy or /canary blocks promotion.
+  # class_floor  — minimum coverage on a CHANGED Apex class in brownfield mode.
+  #                Ignored in greenfield mode.
+  # diff_only    — when true, measure coverage on diff lines only (uses
+  #                ApexCodeCoverage tooling-API rows). Defaults false; flip
+  #                on once the project has stable baseline coverage.
+  #
+  # Read by: agents/test-auditor.md, canary/SKILL.md Step 5, partials/
+  # sf-quality-checklist.md. Skills NEVER hardcode 75/80 — always read from
+  # config and fall back to these defaults if the block is missing.
+  coverage:
+    mode: brownfield
+    org_floor: 75
+    org_target: 80
+    class_floor: 75
+    diff_only: false
+  # ---------------------------------------------------------------------------
+  # smoke_tests — REQ-D. Apex test class names run against staging when no
+  # Apex is in the diff but you still want a smoke gate. When unset, /canary
+  # falls back to RunLocalTests for staging (production-equivalent default).
+  # Sandbox runs NoTestRun for metadata-only diffs regardless.
+  # Example: ["AccountServiceSmokeTest", "OpportunityCriticalPathTest"]
+  # ---------------------------------------------------------------------------
+  smoke_tests: []
 
 # ---------------------------------------------------------------------------
 # stack: Tech stack declaration. Drives conditional skill behavior.

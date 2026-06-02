@@ -3,6 +3,7 @@ id: REQ-xxx
 title: "Feature Title"
 status: draft
 deployable: true
+complexity: small   # trivial | small | medium | large — drives /proceed phase shape (REQ-C)
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 component: ""       # narrow area, e.g., "API/auth", "iOS/SwiftUI", "adlc/spec"
@@ -11,6 +12,22 @@ stack: []           # tech layers touched, e.g., ["express", "firestore"]
 concerns: []        # cross-cutting dimensions, e.g., ["security", "performance", "a11y"]
 tags: []            # free-form keywords, e.g., ["password-reset", "tokens"]
 ---
+
+<!--
+  complexity tiers (REQ-C):
+    trivial — single-file metadata change, no Apex, no architectural decisions
+              (e.g., picklist value, layout edit, perm-set toggle).
+              /proceed: skip validate gates, no architect fan-out, no implementer
+              agent, reflect-only review, sandbox-only canary.
+    small   — ≤3 files, no new pattern (e.g., 1 LWC + 1 Apex controller, single
+              perm-set, 1 Flow). /proceed: inline architect, implementer per
+              task, 2-agent review (reflect + quality), sandbox+staging canary.
+    medium  — 4-10 files OR introduces a new pattern (new trigger handler,
+              new Named Credential, new sObject). /proceed: full pipeline.
+    large   — >10 files OR cross-domain (Data Cloud + Apex + Agentforce,
+              multi-repo). /proceed: full pipeline + ADR capture.
+-->
+
 
 ## Description
 

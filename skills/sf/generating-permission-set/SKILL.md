@@ -179,9 +179,25 @@ Before deploying, verify:
 - [ ] No duplicate permissions
 - [ ] No lengthy comments
 
+## Local pre-flight (REQ-B — always run before deploy)
+
+Run the perm-set FLS pre-flight script. It queries the target org's `FieldDefinition` (Tooling API) once per object and validates every `<fieldPermissions>` entry against the FLS-eligibility rules — this catches the entire class of "field is required / formula / master-detail / auto-number / not in org" failures locally instead of waiting 60-90s for `sf project deploy validate` to surface them.
+
+```sh
+sh tools/sf-preflight/check.sh permsets \
+  --workspace force-app \
+  --target-org "$ALIAS"
+```
+
+Add `--offline` to skip the Tooling API call and validate only the XML structure (use during pure authoring; never as the final gate). Add `--json` for machine-readable output.
+
+Exit codes: `0` = clean, `1` = at least one finding (BLOCK), `2` = invocation error.
+
 ## What Causes Deployment Failure
 
-- **Field permissions on required fields:** Any required field in `<fieldPermissions>` fails deployment. Required fields cannot have FLS; omit them entirely. Always confirm from object/field metadata that a field exists and is not required—never assume.
+- **Field permissions on required fields:** Any required field in `<fieldPermissions>` fails deployment. Required fields cannot have FLS; omit them entirely. The pre-flight script (above) catches this automatically by reading `FieldDefinition.IsNillable` from the org.
+- **Field permissions on formula / auto-number / master-detail fields with `editable=true`:** Salesforce rejects these. Pre-flight catches them via `IsCalculated`, `IsAutoNumber`, and `DataType=MasterDetail`.
+- **Field doesn't exist in target org:** typos, namespace mismatches, deletion drift. Pre-flight catches by missing `FieldDefinition` row.
 - **Incorrect API names:** Using the wrong name or missing suffixes (e.g. missing `__c` for custom objects, fields, tabs) cause failure.
 
 ## Deployment

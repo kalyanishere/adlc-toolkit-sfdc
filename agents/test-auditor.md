@@ -31,7 +31,14 @@ Always read `salesforce-rules.md` Testing section for the always-on baseline.
 
 Non-negotiable from salesforce-rules.md Testing section:
 
-- **Minimum 75% Apex code coverage** at the org level (Salesforce platform requirement); aim higher (>80%) per project policy
+- **Coverage policy (REQ-A)** — read `.adlc/config.yml` `salesforce.coverage` block first. Apply the policy below; do NOT hardcode 75/80.
+  - `mode: greenfield` → org-level coverage is the only **blocking** gate. Per-changed-class coverage is reported as **informational**, never elevated to Critical/Major.
+  - `mode: brownfield` (default) → both gates apply: org coverage ≥ `org_target` AND every changed Apex class coverage ≥ `class_floor`. Either failing is Critical.
+  - `org_floor` (default 75) — Salesforce platform minimum; report Critical when org coverage falls below this regardless of mode.
+  - `org_target` (default 80) — project floor; report Major when between `org_floor` and `org_target`.
+  - `class_floor` (default 75) — only enforced in brownfield mode for files in the diff.
+  - `diff_only: true` — measure changed lines via `ApexCodeCoverage` Tooling rows instead of class aggregates (use `ApexCodeCoverageAggregate` only when this is false).
+  - When `.adlc/config.yml` lacks the block, fall back to `mode: brownfield, org_floor: 75, org_target: 80, class_floor: 75, diff_only: false`.
 - **Meaningful assertions** — no `Assert.areEqual(true, true)`, no vacuous tests
 - **`Test.startTest()` / `Test.stopTest()`** around the unit under test (gives a fresh governor-limit pool)
 - **`@TestSetup`** for shared data when ≥2 test methods need the same fixtures

@@ -62,6 +62,7 @@ Deterministic Dynamic-Workflow scripts powering `/sprint --workflow`. See [`work
 
 - [`tools/sf-lint/`](tools/sf-lint/README.md) — Salesforce-rules static checker (sharing keyword, AccessLevel, no `@future`, no `SeeAllData=true`, no SOQL/DML in loops, no hardcoded IDs/URLs, perm-set naming, `View/ModifyAllData` anti-patterns, ApexDoc presence)
 - [`tools/lint-skills/`](tools/lint-skills/README.md) — SKILL.md hygiene + agent-model policy gate (Sonnet/Opus only) + sf-quality-checklist sourcing advisory
+- [`tools/sf-preflight/`](tools/sf-preflight/README.md) — local pre-deploy gates that catch failures in seconds instead of paying 60-90s per `sf project deploy validate`. `permsets` (REQ-B): queries Tooling-API `FieldDefinition` and validates every `<fieldPermissions>` against required / formula / master-detail / auto-number / missing-from-org rules. `metadata` (REQ-F): workspace-internal cross-reference — perm-sets to Apex/apps/tabs/record-types, layouts to fields, FlexiPages to objects. Wired into `generating-permission-set` SKILL.md and `/canary` Step 2a.
 
 ### Quality gates
 
@@ -141,6 +142,18 @@ Required values to fill in:
 
 `/canary` deploys to sandbox and staging itself, but **for prod it stops at validate**. It surfaces the validation id from `sf project deploy validate` and prints the exact `sf project deploy quick --target-org <prod-alias> --job-id <validation-id>` command for you to run yourself. The skill never executes a deploy command against the prod alias under any circumstances — Agentforce and Playwright smoke gates against prod are skipped for the same reason (no fresh deploy yet) and should be re-run after the manual deploy lands. Validations remain reusable for ~10 days.
 
+### Complexity-aware `/proceed` (REQ-C)
+
+The requirement template carries a `complexity:` frontmatter field — `trivial | small | medium | large` — and `/proceed` scales the orchestration to match. Trivial perm-set / picklist / layout edits skip the validate gates and run a reflector-only Phase 5; small REQs add the quality reviewer; medium and large run the full 6-agent panel. Hard gates (worktree isolation, `pipeline-state.json`, local pre-flight, coverage policy, halt points) apply at every tier — only the fan-out changes. `/spec` Step 2.5 picks a default; the user can override.
+
+### Diff-aware test level in `/canary` (REQ-D)
+
+`/canary` Step 2b auto-picks `--test-level` from the diff. Metadata-only sandbox deploys run `NoTestRun`; sandbox+Apex runs `RunSpecifiedTests` against the test classes derived from the changed-class file names; staging falls back to `RunLocalTests` (or to a configured smoke list via `salesforce.smoke_tests`); prod always runs `RunLocalTests`. Saves typically 60-90% of validate wall time on metadata-only changes.
+
+### React UI Bundles (Beta) — multi-framework
+
+When `salesforce.features.ui_bundles: true` in `.adlc/config.yml`, the toolkit treats the multi-framework UI Bundles Beta as enabled in the target org. `generating-lwc-components` then offers a React path that scaffolds via `sf template generate ui-bundle -n ReactInternalApp|ReactExternalApp --template reactbasic`, requires `npm install` immediately after, and deploys via stock `sf project deploy start --source-dir uiBundles/<Name>` after `npm run build`. Internal vs external naming is captured in the requirement template's "Frontend framework" cue. When the flag is off (default), the React path is suppressed and skills stay LWC-only.
+
 For bugs: `/bugfix` (report → analyze → fix → verify → ship)
 
 For multi-REQ batches: `/sprint` (parallel `/proceed` runners)
@@ -187,6 +200,8 @@ The default for SF projects is single-repo (one DX project, `repos: { sfdc: { pr
 - **No `@future`**: use queueables with `System.Finalizer`. Enforced by sf-lint.
 - **Permissions.md**: every feature touching metadata generates one (template at `templates/permissions-template.md`). Enforced by `/wrapup` Step 3a.
 - **Agentforce deploy order**: fields → Apex → Flow → GenAi* → publish → activate. API ≥ 66.0. Enforced by `/wrapup` Step 3b.
+- **Coverage policy (REQ-A)**: three-tier model in `.adlc/config.yml` `salesforce.coverage` — `org_floor` (75 platform min), `org_target` (project floor, default 80), `class_floor` (per-changed-class in brownfield mode, default 75), `mode: greenfield|brownfield`. Greenfield projects gate deploys on org-level coverage only; brownfield gates both org and per-changed-class. Skills MUST read from config; never hardcode 75/80. Enforced by `/canary` Step 5 and `agents/test-auditor.md`.
+- **Local pre-flight before `validate` (REQ-B + REQ-F)**: `/canary` Step 2a runs `tools/sf-preflight/check.sh permsets` (org-aware FLS / required / formula / master-detail / missing-from-org gate) and `tools/sf-preflight/check.sh metadata` (workspace cross-reference) before paying for a server-side `sf project deploy validate`. Block findings refuse to call validate; the user fixes the metadata and re-runs `/canary`.
 
 The full set is in [`.adlc/context/salesforce-rules.md`](.adlc/context/salesforce-rules.md), with the static-checkable subset in [`partials/sf-quality-checklist.md`](partials/sf-quality-checklist.md) and mechanized in [`tools/sf-lint/`](tools/sf-lint/README.md).
 
