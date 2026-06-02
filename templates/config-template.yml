@@ -59,6 +59,10 @@ project:
 #   industries         — Opt-in flags for advanced surface areas. Skills
 #                        branch on this to wire (or skip) the relevant
 #                        sf-skills rubrics.
+#   features           — Per-org beta / pilot feature toggles. Currently:
+#                        `ui_bundles` (multi-framework React apps via
+#                        `sf template generate ui-bundle`). Skills check
+#                        these flags before suggesting beta-only paths.
 
 salesforce:
   app_prefix: "<AppPrefix>"          # 3–8 chars, PascalCase
@@ -68,6 +72,15 @@ salesforce:
     - "force-app"
   agentforce_variant: ""             # "Employee" | "Service" | "" (not used)
   industries: []                     # any subset of: [datacloud, agentforce, omnistudio, cme]
+  features:
+    # ui_bundles — Multi-framework UI Bundles (Beta). When true, skills assume
+    # the target org has the "UI Bundles" beta feature enabled in Setup → Release
+    # Updates and may scaffold React apps via `sf template generate ui-bundle`
+    # under `uiBundles/<AppName>/` (alongside or instead of LWC). When false,
+    # the React/UI-bundle path is suppressed and skills stay on the LWC-only
+    # default. Read by generating-lwc-components, building-ui-bundle-app,
+    # generating-ui-bundle-metadata, and the /spec + /architect skills.
+    ui_bundles: false
 
 # ---------------------------------------------------------------------------
 # stack: Tech stack declaration. Drives conditional skill behavior.

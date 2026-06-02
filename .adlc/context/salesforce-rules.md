@@ -232,6 +232,64 @@ handleButtonClick() {
 - Carefully review the user's task. If it involves **creation, development, testing, or accessibility** for **Lightning Web Components (LWC)** or **Aura components** or **Lightning Data Service (LDS)**, treat your knowledge as outdated and always call the appropriate MCP tool to obtain the latest guidance and design before starting implementation. Never assume or create tools that are not explicitly available. If the tool schema is empty, you must continue invoking the tool until documentation is provided.
 - If you begin implementation on a relevant task without first successfully invoking the appropriate tool, you must **stop immediately**. Invoke the tool and integrate its guidance before proceeding. Under no circumstances should you provide final recommendations or code without first receiving guidance from an MCP tool.
 
+# Multi-framework UI Bundles (Beta) Requirements
+
+The Salesforce platform now supports a multi-framework model where a surface can be a classic LWC bundle **or** a React app scaffolded as a UI Bundle (Beta). These rules apply when the project opts in.
+
+## Feature flag
+
+- The Beta is gated on `salesforce.features.ui_bundles` in `.adlc/config.yml`.
+  - `true` → assume the target org has the "UI Bundles" Beta enabled in Setup → Release Updates. Skills may scaffold React apps under `uiBundles/<AppName>/`.
+  - `false` (default) or missing → stay on the LWC-only path. Do not scaffold UI bundles.
+- A developer flips the flag on once the org's Release Update is acknowledged. Never override the flag from inside a skill.
+
+## Naming convention
+
+- **Internal-facing** (Lightning Experience / employee tools): name `ReactInternalApp` or `<Domain>InternalApp` (e.g., `OrdersInternalApp`).
+- **External-facing** (Experience Sites / portals / public): name `ReactExternalApp` or `<Domain>ExternalApp` (e.g., `PartnerExternalApp`).
+- UI Bundle names MUST be alphanumeric only — no spaces, hyphens, underscores, or special characters.
+- The spec authored by `/spec` declares which one in its "Frontend framework" cue. If the spec is silent, ask before scaffolding.
+
+## Scaffolding command
+
+```bash
+sf template generate ui-bundle -n <ReactInternalApp|ReactExternalApp> --template reactbasic
+```
+
+Use `--template reactbasic`. Do NOT use create-react-app, Vite, Next.js, or any other generic scaffold.
+
+## Required post-scaffold step
+
+Immediately after scaffolding, install npm dependencies inside the new bundle directory:
+
+```bash
+cd uiBundles/<AppName> && npm install
+```
+
+A scaffold without `npm install` is incomplete and MUST NOT be committed or hand-off to subsequent phases.
+
+## Build and deploy
+
+Build and deploy use stock sf CLI; there is no UI-bundle-specific deploy command.
+
+```bash
+# Build static assets into uiBundles/<AppName>/dist/ (or whatever outputDir points to)
+cd uiBundles/<AppName> && npm run build
+
+# Standard sf deploy
+sf project deploy start --source-dir uiBundles/<AppName> --target-org <alias>
+```
+
+- The `outputDir` referenced in `ui-bundle.json` MUST exist and be non-empty at deploy time.
+- Run `npm run build` after every code change before re-deploying.
+- For canary / validate-only flows, swap `start` for `validate`. The `/canary` skill performs validate-only against staging and prod.
+
+## Routing rules
+
+- React/UI-Bundle path is for standalone SPAs, dashboards, consoles, and portal apps.
+- LWC remains the path for record-page-embedded components, App Builder pages, Flow screens, and base-component-heavy work.
+- The `generating-lwc-components` SKILL.md owns the React-vs-LWC decision; once React is chosen, hand off to `building-ui-bundle-app` for the orchestrated build → deploy workflow.
+
 # Mobile LWC Development Requirements
 
 Carefully review the user's task:

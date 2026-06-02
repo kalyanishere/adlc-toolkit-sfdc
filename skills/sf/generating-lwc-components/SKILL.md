@@ -23,6 +23,80 @@ Delegate elsewhere when the user is:
 - writing Apex controllers or business logic first → [generating-apex](../generating-apex/SKILL.md)
 - building Flow XML rather than an LWC screen component → [generating-flow](../generating-flow/SKILL.md)
 - deploying metadata → [deploying-metadata](../deploying-metadata/SKILL.md)
+- scaffolding a **React** app (multi-framework UI Bundles beta) → [building-ui-bundle-app](../building-ui-bundle-app/SKILL.md) and [generating-ui-bundle-metadata](../generating-ui-bundle-metadata/SKILL.md). This skill still owns the React-vs-LWC decision; see "Choosing the framework" below.
+
+---
+
+## Choosing the framework: LWC vs React (UI Bundles beta)
+
+Salesforce now supports a **multi-framework** model. A surface can be built as either:
+
+- a classic LWC bundle under `force-app/main/default/lwc/<name>/`, or
+- a **React** app scaffolded as a UI Bundle under `uiBundles/<AppName>/` (Beta — `sf template generate ui-bundle`).
+
+This skill assumes the **UI Bundles beta is enabled in the target org** when `salesforce.features.ui_bundles: true` is declared in `.adlc/config.yml` (see [conventions.md](../../../.adlc/context/conventions.md)). The flag is **off by default** — if it is `false` or missing, stay on the LWC-only path and do not suggest scaffolding a UI Bundle. A developer flips it on once the org has the Release Update enabled.
+
+### Decision rules
+
+| Cue from the spec / user | Pick |
+|---|---|
+| Embedded in a Lightning record page, App Builder, Flow screen, or Experience Cloud LWR site | **LWC** |
+| Standalone single-page app, dashboard, console, or full-screen workflow | **React (UI Bundle)** if flag on, otherwise LWC |
+| Heavy use of `lightning-record-edit-form`, base components, LDS, or `@wire` | **LWC** |
+| React/Vite ecosystem, third-party React libs, npm-managed deps | **React (UI Bundle)** |
+| Internal employee tool surfaced inside Lightning Experience | **React internal** — name `ReactInternalApp` (or `<Domain>InternalApp`) |
+| Public/portal-facing site or community-served standalone app | **React external** — name `ReactExternalApp` (or `<Domain>ExternalApp`) |
+
+The spec authored by `/spec` carries this classification in its frontmatter / cues (see [requirement-template.md](../../../templates/requirement-template.md)). If the spec is silent and the flag is on, ask once before scaffolding.
+
+### Feature-flag check (required before scaffolding a UI Bundle)
+
+```sh
+# Read the flag; default to off
+ui_bundles=$(grep -A1 '^[[:space:]]*features:' .adlc/config.yml 2>/dev/null \
+  | grep -E '^\s*ui_bundles:' | awk '{print $2}' | tr -d '"' )
+ui_bundles=${ui_bundles:-false}
+```
+
+If `ui_bundles` is not `true`, refuse the React/UI-bundle path and continue with LWC. Do not silently scaffold something that won't deploy.
+
+### Scaffolding the React app (when flag is on)
+
+```bash
+# Internal-facing app (employee / Lightning Experience surfaces)
+sf template generate ui-bundle -n ReactInternalApp --template reactbasic
+
+# External-facing app (public / Experience Site surfaces)
+sf template generate ui-bundle -n ReactExternalApp --template reactbasic
+```
+
+After scaffolding, **immediately install npm dependencies inside the new bundle**:
+
+```bash
+cd uiBundles/ReactInternalApp && npm install
+# or
+cd uiBundles/ReactExternalApp && npm install
+```
+
+Skipping `npm install` leaves an unbuildable scaffold and downstream phases (data wiring, frontend, deploy) will all fail. Then hand off to [building-ui-bundle-app](../building-ui-bundle-app/SKILL.md) for the orchestrator workflow.
+
+> **Naming**: UI Bundle names must be alphanumeric only (no hyphens, underscores, or spaces). Pick `ReactInternalApp` / `ReactExternalApp` as defaults, or `<Domain>InternalApp` / `<Domain>ExternalApp` (e.g., `OrdersInternalApp`, `PartnerExternalApp`) when a single repo carries multiple bundles.
+
+### Building and deploying the React app
+
+Use the standard sf CLI flow — there is no special UI-Bundle deploy command. The only extra step versus LWC is that you must produce the static `dist/` first:
+
+```bash
+# 1. Build the React bundle (produces uiBundles/<AppName>/dist/)
+cd uiBundles/ReactInternalApp && npm run build && cd -
+
+# 2. Deploy the bundle metadata + dist as usual
+sf project deploy start \
+  --source-dir uiBundles/ReactInternalApp \
+  --target-org <org-alias>
+```
+
+For validate-only / canary promotions, swap `start` for `validate` exactly as with any other Salesforce metadata. The `dist/` directory referenced by `outputDir` in `ui-bundle.json` must exist and be non-empty at deploy time, so always run `npm run build` after any code change before re-deploying.
 
 ---
 

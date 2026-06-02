@@ -12,6 +12,29 @@ metadata:
 
 Build a complete, deployable Salesforce React UI bundle application from a natural language description by orchestrating specialized UI bundle skills in correct dependency order. Each skill **MUST** be explicitly loaded before executing its phase.
 
+## Prerequisite: feature flag
+
+UI Bundles is a **Beta** multi-framework feature. Skills assume the target org has it enabled when `salesforce.features.ui_bundles: true` is declared in `.adlc/config.yml`. When the flag is `false` or missing, **stop and route the user to the LWC path** (`generating-lwc-components`). A developer flips the flag on once the org's Release Update is acknowledged.
+
+```sh
+ui_bundles=$(grep -A1 '^[[:space:]]*features:' .adlc/config.yml 2>/dev/null \
+  | grep -E '^\s*ui_bundles:' | awk '{print $2}' | tr -d '"')
+if [ "${ui_bundles:-false}" != "true" ]; then
+  echo "UI Bundles Beta is disabled (.adlc/config.yml: salesforce.features.ui_bundles)."
+  echo "Use the LWC path (generating-lwc-components) instead, or flip the flag on."
+  exit 1
+fi
+```
+
+## Internal vs external app classification
+
+Before Phase 1, pick the bundle name from the spec:
+
+- `ReactInternalApp` — employee / Lightning-Experience-facing (default for internal tools)
+- `ReactExternalApp` — portal / Experience-Site / public-facing
+
+Domain-prefixed variants (`OrdersInternalApp`, `PartnerExternalApp`, …) are valid when a single repo carries multiple bundles. Names must be alphanumeric only. The spec should declare this in its "Frontend framework" cue (see `templates/requirement-template.md`).
+
 ## When to Use This Skill
 
 **Use when:**
@@ -213,9 +236,14 @@ Execute each phase sequentially. Complete all steps within a phase before moving
 ---
 
 **Phase 1 -- Scaffolding**
+- 0. Pre-flight: Confirm `salesforce.features.ui_bundles: true` in `.adlc/config.yml`. If off, abort and route to LWC path.
 - 1. Load skill: Invoke `generating-ui-bundle-metadata`
-- 2. Execute: Run `sf template generate ui-bundle`, install dependencies (`npm install`), configure meta XML, ui-bundle.json, and CSP trusted sites
-- 3. Verify: Confirm directory structure and metadata files exist
+- 2. Execute:
+     a. Pick the bundle name (`ReactInternalApp` or `ReactExternalApp`, optionally domain-prefixed)
+     b. Run `sf template generate ui-bundle -n <Name> --template reactbasic`
+     c. **Immediately run `cd uiBundles/<Name> && npm install`** — never skip
+     d. Configure meta XML, ui-bundle.json, and CSP trusted sites
+- 3. Verify: Confirm directory structure, `node_modules/` present, and metadata files exist
 - 4. Checkpoint: UI bundle scaffold is ready -- proceed to Phase 2
 
 **Phase 2 -- Features** (skip if no pre-built features needed)
@@ -244,7 +272,14 @@ Execute each phase sequentially. Complete all steps within a phase before moving
 
 **Phase 6 -- Deployment**
 - 1. Load skill: Invoke `deploying-ui-bundle`
-- 2. Execute: Follow the 7-step deployment sequence (auth, build, deploy, permissions, data, schema, final build)
+- 2. Execute: Follow the 7-step deployment sequence:
+     a. Authenticate against the target org
+     b. Pre-deploy build: `cd uiBundles/<Name> && npm install && npm run build`
+     c. Deploy with stock sf CLI: `sf project deploy start --source-dir uiBundles/<Name> --target-org <alias>` (use `validate` for canary)
+     d. Apply post-deploy configuration (permissions, profiles, named credentials, connected apps, custom settings, flow activation)
+     e. Import data (if a data plan exists)
+     f. Re-fetch GraphQL schema and run codegen against the deployed org
+     g. Final `npm run build` against the deployed schema, then re-deploy if anything changed
 - 3. Verify: Confirm deployment succeeds and app is accessible
 - 4. Checkpoint: App deployed -- proceed to Phase 7 if needed
 

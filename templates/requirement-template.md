@@ -16,6 +16,14 @@ tags: []            # free-form keywords, e.g., ["password-reset", "tokens"]
 
 What the feature does and why.
 
+## Frontend framework
+
+_Pick one when the feature has a UI surface. Skills branch on this in Phase 4. The React paths require `salesforce.features.ui_bundles: true` in `.adlc/config.yml` (multi-framework UI Bundles Beta)._
+
+- [ ] **LWC** (default) — record page, App Builder, Flow screen, or base-component-heavy work
+- [ ] **React internal** (`ReactInternalApp`) — standalone SPA inside Lightning Experience for employees
+- [ ] **React external** (`ReactExternalApp`) — standalone SPA served from an Experience Site / portal / public
+
 ## System Model
 
 _Define the structured data model for this feature. Remove sections that don't apply._

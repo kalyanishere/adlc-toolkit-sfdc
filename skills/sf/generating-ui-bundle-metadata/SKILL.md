@@ -7,6 +7,16 @@ metadata:
 
 # UI Bundle Metadata
 
+## Prerequisites: feature flag
+
+UI Bundles is a **Beta** Salesforce feature (multi-framework). Skills assume the target org has it enabled when `salesforce.features.ui_bundles: true` is set in `.adlc/config.yml`. When the flag is missing or `false`, **do not scaffold** — fall back to the LWC path in [generating-lwc-components](../generating-lwc-components/SKILL.md). A developer flips the flag on once the org's Release Update is acknowledged.
+
+```sh
+ui_bundles=$(grep -A1 '^[[:space:]]*features:' .adlc/config.yml 2>/dev/null \
+  | grep -E '^\s*ui_bundles:' | awk '{print $2}' | tr -d '"')
+[ "${ui_bundles:-false}" = "true" ] || { echo "UI Bundles flag off — refusing to scaffold."; exit 1; }
+```
+
 ## Scaffolding a New UI Bundle
 
 Use `sf template generate ui-bundle` to create new apps — not create-react-app, Vite, or other generic scaffolds.
@@ -15,17 +25,59 @@ Use `sf template generate ui-bundle` to create new apps — not create-react-app
 
 **UI bundle name (`-n`):** Alphanumerical only — no spaces, hyphens, underscores, or special characters.
 
+### Naming convention: internal vs external
+
+Pick the name based on the audience the spec calls out:
+
+| Audience | Default name | Use when |
+|---|---|---|
+| Employee / Lightning Experience surface | `ReactInternalApp` (or `<Domain>InternalApp`) | The app runs inside Lightning Experience for internal users |
+| Portal / Experience Site / public | `ReactExternalApp` (or `<Domain>ExternalApp`) | The app is served from a Digital Experience Site to external users |
+
+The spec authored by `/spec` should declare which one (see `templates/requirement-template.md` → "Frontend framework"). If the spec is silent, ask once before scaffolding.
+
 **Example:**
 ```bash
-sf template generate ui-bundle -n CoffeeBoutique --template reactbasic
+# Internal — employee-facing
+sf template generate ui-bundle -n ReactInternalApp --template reactbasic
+
+# External — portal/public-facing
+sf template generate ui-bundle -n ReactExternalApp --template reactbasic
 ```
 
-After generation:
-1. Replace all default boilerplate — "React App", "Vite + React", default `<title>`, placeholder text
-2. Populate the home page with real content (landing section, banners, hero, navigation)
-3. Update navigation and placeholders (see the `building-ui-bundle-frontend` skill)
+### Required next step: install npm dependencies
 
-Always install dependencies before running any scripts in the UI bundle directory.
+Immediately after `sf template generate ui-bundle`, install dependencies inside the new bundle directory:
+
+```bash
+cd uiBundles/ReactInternalApp && npm install
+# or
+cd uiBundles/ReactExternalApp && npm install
+```
+
+Without this step the bundle cannot lint, build, or deploy. Treat scaffolding without `npm install` as an incomplete Phase 1.
+
+After generation:
+1. Install npm dependencies (above) — non-negotiable
+2. Replace all default boilerplate — "React App", "Vite + React", default `<title>`, placeholder text
+3. Populate the home page with real content (landing section, banners, hero, navigation)
+4. Update navigation and placeholders (see the `building-ui-bundle-frontend` skill)
+
+## Building and deploying the bundle
+
+Build and deploy use stock sf CLI — there is no UI-Bundle-specific deploy command.
+
+```bash
+# Build static assets into uiBundles/<AppName>/dist/
+cd uiBundles/ReactInternalApp && npm run build && cd -
+
+# Standard sf deploy
+sf project deploy start \
+  --source-dir uiBundles/ReactInternalApp \
+  --target-org <org-alias>
+```
+
+For canary / validate-only flows, swap `start` for `validate`. The directory referenced by `outputDir` in `ui-bundle.json` must exist and be non-empty at deploy time, so always run `npm run build` after any code change before re-deploying.
 
 ---
 

@@ -7,11 +7,16 @@
 |------|---------|
 | Create component | `sf template generate lightning component --name myComp --type lwc` |
 | Create FlexiPage | `sf template generate flexipage --name MyPage --template DefaultAppPage` |
+| Create React app (UI Bundle, internal) | `sf template generate ui-bundle -n ReactInternalApp --template reactbasic` |
+| Create React app (UI Bundle, external) | `sf template generate ui-bundle -n ReactExternalApp --template reactbasic` |
+| Install React app deps | `cd uiBundles/<AppName> && npm install` |
+| Build React app for deploy | `cd uiBundles/<AppName> && npm run build` |
 | Run all tests | `sf force lightning lwc test run` |
 | Preview a component locally | `sf lightning dev component --target-org my-sandbox` |
 | Preview an app locally | `sf lightning dev app --target-org my-sandbox` |
 | Preview an Experience Cloud site locally | `sf lightning dev site --target-org my-sandbox` |
 | Deploy component | `sf project deploy start --source-dir force-app/.../lwc/myComp` |
+| Deploy React app | `sf project deploy start --source-dir uiBundles/<AppName>` |
 | Create message channel | Manual XML: `force-app/.../messageChannels/MyChannel.messageChannel-meta.xml` |
 
 ---
@@ -40,6 +45,72 @@ sf template generate lightning component \
 # The test file must be created manually in __tests__ folder
 mkdir -p force-app/main/default/lwc/accountList/__tests__
 touch force-app/main/default/lwc/accountList/__tests__/accountList.test.js
+```
+
+---
+
+## React via UI Bundle (Beta — multi-framework)
+
+> **Feature flag**: only run these commands when `salesforce.features.ui_bundles: true` is set in `.adlc/config.yml`. The flag tells skills to assume the target org has the "UI Bundles" Beta enabled in Setup → Release Updates. When the flag is off, stay on the LWC path.
+
+### Naming convention
+
+Use `ReactInternalApp` for employee-/Lightning-Experience-facing apps and `ReactExternalApp` for portal-/Experience-Site-facing apps. When a repo carries multiple bundles, prefix with the domain — e.g., `OrdersInternalApp`, `PartnerExternalApp`. Names must be alphanumeric only.
+
+### Scaffold a new React app
+
+```bash
+# Internal (employee-facing) React app
+sf template generate ui-bundle -n ReactInternalApp --template reactbasic
+
+# External (portal-facing) React app
+sf template generate ui-bundle -n ReactExternalApp --template reactbasic
+```
+
+This generates `uiBundles/<AppName>/` with the React/Vite scaffold, `<AppName>.uibundle-meta.xml`, and `ui-bundle.json`.
+
+### Install npm dependencies (required immediately after scaffolding)
+
+```bash
+cd uiBundles/ReactInternalApp && npm install
+# or:  cd uiBundles/ReactExternalApp && npm install
+```
+
+Without this step the project cannot lint, build, or deploy.
+
+### Build the React app
+
+```bash
+# Produces uiBundles/<AppName>/dist/
+cd uiBundles/ReactInternalApp && npm run build
+```
+
+The deploy step requires a populated `dist/` (or whatever path `outputDir` points to in `ui-bundle.json`). Re-run `npm run build` after every code change before re-deploying.
+
+### Deploy the React app (standard sf CLI)
+
+```bash
+# Validate-only (canary / staging)
+sf project deploy validate \
+  --source-dir uiBundles/ReactInternalApp \
+  --target-org my-sandbox
+
+# Deploy
+sf project deploy start \
+  --source-dir uiBundles/ReactInternalApp \
+  --target-org my-sandbox
+```
+
+End-to-end CI-style sequence:
+
+```bash
+cd uiBundles/ReactInternalApp \
+  && npm install \
+  && npm run build \
+  && cd - \
+  && sf project deploy start \
+       --source-dir uiBundles/ReactInternalApp \
+       --target-org my-sandbox
 ```
 
 ---
