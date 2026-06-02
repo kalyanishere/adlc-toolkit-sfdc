@@ -27,7 +27,10 @@ Before proceeding, verify that `.adlc/specs/` exists. If it doesn't, stop and te
 ## Instructions
 
 ### Step 1: Identify What to Validate
-1. If given a REQ ID, locate all artifacts under `.adlc/specs/REQ-xxx-*/`
+1. If given a REQ ID, locate all artifacts under `.adlc/specs/<REQ_ID>-*/`. The id can be either the new shortname-namespaced form (`<XYZ>-REQ-NNN`, e.g., `SFC-REQ-007`) or the legacy un-namespaced form (`REQ-NNN`). Glob patterns:
+   - new: `.adlc/specs/<XYZ>-REQ-<NNN>-*/` (where `<XYZ>` is the project's `project.shortname`)
+   - legacy: `.adlc/specs/REQ-<NNN>-*/`
+   Match either; treat as the same artifact regardless of prefix.
 2. If given a phase name, validate the most recently modified artifacts for that phase
 3. Determine the current phase based on what artifacts exist:
    - **Spec phase**: Only `requirement.md` exists

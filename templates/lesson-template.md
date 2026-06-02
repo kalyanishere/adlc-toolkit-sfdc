@@ -1,12 +1,13 @@
 <!--
-Filename MUST be `LESSON-xxx-slug.md` (e.g., `LESSON-041-signed-url-ttl-mismatch.md`).
-- `xxx` is the next available integer, zero-padded to 3 digits, unique across `.adlc/knowledge/lessons/`.
+Filename MUST be `<XYZ>-LESSON-NNN-slug.md` (e.g., `SFC-LESSON-041-signed-url-ttl-mismatch.md`).
+- `<XYZ>` is the project's `project.shortname` from .adlc/config.yml (3 uppercase letters).
+- `NNN` is allocated by /wrapup or /bugfix lesson-capture via partials/id-counter.sh, zero-padded to 3 digits.
 - `slug` is lowercase kebab-case, ≤6 words.
+- Legacy un-namespaced filenames (`LESSON-NNN-slug.md`) remain valid history. Do NOT rename them.
 - Do NOT use date-prefixed names (`2026-MM-DD-…md`) or bare numeric prefixes (`034-…md`).
-  Those are legacy schemes and are not valid for new lessons.
 -->
 ---
-id: LESSON-xxx
+id: XYZ-LESSON-001       # `<project.shortname>-LESSON-NNN` — allocated by /wrapup or /bugfix
 title: "Lesson Title"
 component: ""       # narrow area, e.g., "API/auth", "iOS/SwiftUI"
 domain: ""          # broad area, e.g., "auth", "testing", "adlc"

@@ -27,12 +27,21 @@
 # ---------------------------------------------------------------------------
 # project: Display name and (optional) preset reference.
 # ---------------------------------------------------------------------------
-# `name` is shown in skill output and PR/commit metadata.
-# `preset` is informational only: it records which preset (if any) this config
-# was seeded from. Skills don't read it; it's a hint for `/template-drift`.
+# `name`      — shown in skill output and PR/commit metadata.
+# `shortname` — REQUIRED. Exactly 3 uppercase letters (`^[A-Z]{3}$`). Used to
+#               namespace ADLC IDs as `<SHORT>-REQ-NNN`, `<SHORT>-BUG-NNN`,
+#               `<SHORT>-LESSON-NNN`. Skills hard-fail when this is missing.
+#               Pick something unique across every repo on your machine — once
+#               specs exist, changing it requires a migration. Examples:
+#               SFC = Salesforce Customer-360, ORD = Order Management,
+#               PRT = Partner Portal.
+# `preset`    — informational only: records which preset (if any) this config
+#               was seeded from. Skills don't read it; it's a hint for
+#               `/template-drift`.
 
 project:
   name: "My Salesforce Project"
+  shortname: "XYZ"               # 3 uppercase letters, REQUIRED
   # preset: sfdc-core
 
 # ---------------------------------------------------------------------------

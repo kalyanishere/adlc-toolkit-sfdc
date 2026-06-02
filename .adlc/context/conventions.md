@@ -32,7 +32,7 @@ The full set is in `.adlc/context/salesforce-rules.md`. Phase 4 (task-implemente
 - Skill files: always `SKILL.md` (uppercase, singular) inside the skill directory
 - Agent files: `agents/<agent-name>.md`, hyphenated lowercase
 - Templates: `templates/<artifact>-template.md`
-- IDs: `REQ-xxx` (zero-padded to 3 digits), `TASK-yyy`, `BUG-zzz`, `LESSON-nnn` — always uppercase prefix, always 3 digits minimum
+- IDs: namespaced by `project.shortname` from `.adlc/config.yml` (3-uppercase-letter prefix). Format: `<XYZ>-REQ-NNN`, `<XYZ>-BUG-NNN`, `<XYZ>-LESSON-NNN`, `TASK-NNN` (TASK ids stay un-namespaced — they live inside a parent REQ directory). NNN is zero-padded to 3 digits minimum. Example: `SFC-REQ-007`, `SFC-BUG-014`, `SFC-LESSON-022`. Allocated by `partials/id-counter.sh` against a per-project counter at `.adlc/.next-{req,bug,lesson}` — bootstrap from existing high-water mark on first allocation, never resets to 1 if artifacts exist. Legacy un-namespaced ids (`REQ-475-foo` from before the shortname era) remain valid history; the bootstrap reads them so new allocations resume above their high-water.
 - Slugs: lowercase kebab-case, ≤6 words, no dates, no bare numbers
 - Salesforce metadata follows Salesforce-native naming (PascalCase API names for objects/fields, etc.) — those rules are owned by salesforce-rules.md, not this file.
 

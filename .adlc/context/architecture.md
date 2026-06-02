@@ -137,9 +137,12 @@ Skills retrieve relevant prior knowledge at context-loading time via a **weighte
 
 ## Key cross-cutting dependencies
 
-- **Atomic REQ counter**: `~/.claude/.global-next-req` is a shared counter across all consumer repos to guarantee unique REQ IDs. Protected by a POSIX `mkdir`-based lock at `~/.claude/.global-next-req.lock.d` for concurrent-safe increments. The lock acquisition pre-checks `[ -L "$LOCK" ]` and refuses to run if the path is a symlink, defending against a TOCTOU symlink-swap.
-- **Atomic BUG counter**: `~/.claude/.global-next-bug` is the cross-repo machine-global counter for BUG IDs, allocated by `/bugfix` Phase 1 with the same `mkdir`-lock + symlink pre-check + fail-loud guards as the global REQ counter.
-- **Atomic LESSON counter**: `~/.claude/.global-next-lesson` is the cross-repo machine-global counter for LESSON IDs, allocated by BOTH `/wrapup` (Step 4) and `/bugfix` (lesson capture). The two skills share the single global lock `~/.claude/.global-next-lesson.lock.d` so concurrent runs mutually exclude.
-- **Atomic per-project counter**: `.adlc/.next-assume` (ASSUME ids) is a per-project counter protected by the same `mkdir`-lock pattern.
+- **Per-project ID allocator**: REQ / BUG / LESSON / ASSUME IDs are allocated per project, namespaced by `project.shortname` from `.adlc/config.yml` (e.g., `SFC-REQ-007`). The canonical implementation lives in `partials/id-counter.sh` and is sourced by `/spec` Step 2, `/bugfix` Phase 1 + lesson-capture, and `/wrapup` Step 4. Counters live at `.adlc/.next-{req,bug,lesson,assume}` per project. Each allocator:
+  - hard-fails if `project.shortname` is missing or doesn't match `^[A-Z]{3}$`
+  - holds a POSIX `mkdir`-based lock at `.adlc/.next-<kind>.lock.d` with a `[ -L ]` symlink pre-check (LESSON-014)
+  - fails loud on missing/empty counter inside the lock (never silently resets to 1)
+  - on first allocation, bootstraps from the highest existing `<XYZ>-<KIND>-NNN` AND legacy un-namespaced `<KIND>-NNN` artifact in the project — so re-running `/init` mid-project never resets to 1
+  - relies on the caller to guard `[ -n "$ID" ]` after `$(allocate_*)` because `return 1` from the partial only exits the subshell (LESSON-015)
+- The legacy machine-global counters (`~/.claude/.global-next-req`, `~/.claude/.global-next-bug`, `~/.claude/.global-next-lesson`) are no longer read or written. Existing files can be left in place.
 - **Worktree isolation**: `/proceed` creates a git worktree per REQ at `.worktrees/REQ-xxx` so multiple pipelines run without collision. `/sprint` orchestrates parallel worktrees.
 - **Symlink install**: changes committed to this repo are live immediately for every Claude Code session on the machine. No build, no deploy.

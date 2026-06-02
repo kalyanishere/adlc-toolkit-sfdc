@@ -128,11 +128,15 @@ Add the following entries to the project's `.gitignore` (create it if it doesn't
 # Claude Code per-user permission overrides (team settings live in .claude/settings.json)
 .claude/settings.local.json
 
-# ADLC ID counters are global (~/.claude/.global-next-req, ~/.claude/.global-next-bug, ~/.claude/.global-next-lesson) — not per-project
-# Legacy per-project counters (deprecated, no longer read/written — ignored if present)
-.adlc/.next-bug
+# ADLC per-project ID counters and locks — transient state; rebuilt on demand
+# from existing artifacts (see partials/id-counter.sh). Do not commit.
 .adlc/.next-req
+.adlc/.next-bug
 .adlc/.next-lesson
+.adlc/.next-req.lock.d/
+.adlc/.next-bug.lock.d/
+.adlc/.next-lesson.lock.d/
+.adlc/.cache/
 ```
 
 ### Step 6: Copy ETHOS.md and Templates Into the Project
@@ -260,13 +264,9 @@ The template pre-approves the routine `git`, `gh`, `npm`, Read/Write/Edit, and a
 
 Advise the user: "`.claude/settings.json` was scaffolded with a default allowlist. Commit this file — it is team-shared. Use `.claude/settings.local.json` (gitignored by Claude Code) for personal overrides."
 
-### Step 9: Scaffold Cross-Repo Config (Optional)
+### Step 9: Scaffold `.adlc/config.yml` and set `project.shortname`
 
-Ask the user: "Will this repo ever share features with other repos you also work on (e.g., an admin app + its API + an iOS app)? If yes, `/proceed` can coordinate REQs across them — this repo needs a `.adlc/config.yml` to list its siblings."
-
-**Conceptual note** — explain if the user seems uncertain: "Primary" is per-REQ, not a fixed role. The current repo is primary for REQs that originate here (`/proceed` invoked from this repo). The siblings you list are other repos that might participate when a cross-repo REQ starts here. If you also originate REQs from one of those siblings, you'll run `/init` there too — each repo that hosts REQs gets its own `.adlc/` and its own `config.yml` listing the others as siblings (mirror images of each other).
-
-If the user confirms cross-repo **and** `.adlc/config.yml` does not already exist, copy the template:
+`.adlc/config.yml` is **required for every project** because the ADLC ID allocator (`partials/id-counter.sh`) reads `project.shortname` to namespace REQ / BUG / LESSON ids as `<XYZ>-REQ-NNN`. Without a shortname, `/spec`, `/bugfix`, and `/wrapup` all hard-fail. So this step is no longer optional.
 
 ```bash
 # Verify source exists
@@ -277,19 +277,54 @@ fi
 
 if [ ! -f .adlc/config.yml ]; then
   cp ~/.claude/skills/templates/config-template.yml .adlc/config.yml
-  echo "Created .adlc/config.yml from template — edit it to match your repo layout."
+  echo "Created .adlc/config.yml from template."
 else
   echo "Preserved existing .adlc/config.yml."
 fi
 ```
 
+Then **resolve `project.shortname`**:
+
+1. Ask the user: "Pick a 3-uppercase-letter shortname for this project (used in IDs like `XYZ-REQ-001`). Examples: `SFC` for Salesforce-Customer-360, `ORD` for Order-Management, `PRT` for Partner-Portal. Pick something unique across every repo on your machine — once specs exist, changing it requires a migration."
+2. Validate against `^[A-Z]{3}$`. Reject anything else and re-prompt.
+3. Write it under `project.shortname` in `.adlc/config.yml`. If a value already exists and matches the regex, preserve it; if it's the placeholder `XYZ`, prompt the user to set a real value.
+
+```bash
+# Verify the shortname field is set and valid
+shortname=$(awk '
+  /^project:/                  { in_project=1; next }
+  in_project && /^[^[:space:]#]/ { in_project=0 }
+  in_project && /^[[:space:]]+shortname:/ {
+    sub(/^[[:space:]]+shortname:[[:space:]]*/, "")
+    gsub(/["'\'']/, "")
+    sub(/[[:space:]]*#.*$/, "")
+    print
+    exit
+  }
+' .adlc/config.yml)
+case "$shortname" in
+  [A-Z][A-Z][A-Z])
+    if [ "$shortname" = "XYZ" ]; then
+      echo "WARNING: project.shortname='XYZ' is the placeholder — replace with a real value before /spec."
+    else
+      echo "OK: project.shortname='$shortname'"
+    fi
+    ;;
+  *)
+    echo "ERROR: project.shortname is missing or invalid in .adlc/config.yml. Set it to 3 uppercase letters before running /spec, /bugfix, or /wrapup."
+    ;;
+esac
+```
+
+**Cross-repo (optional add-on)**. If the user says this repo will ever share features with other repos (admin app + its API + an iOS app, etc.), edit the `repos:` block in the same `.adlc/config.yml` to list siblings. The cross-repo conceptual model:
+
+- "Primary" is per-REQ, not a fixed role. The current repo is primary for REQs that originate here. Siblings are other repos that might participate when a cross-repo REQ starts here.
+- If you also originate REQs from one of those siblings, you'll run `/init` there too — each repo that hosts REQs gets its own `.adlc/`, its own `config.yml`, and its own `project.shortname`. Configs are symmetric mirrors of each other.
+
 Advise the user:
 - "Edit `.adlc/config.yml`. The entry for THIS repo should have `primary: true` and no `path` (path is implicit since it's this repo). Each sibling entry gets a `path:` (relative to this repo root, or absolute). Every sibling must already be cloned locally at that path."
-- "If you also run REQs from one of the siblings, run `/init` there too. That repo's config will mark itself as primary and list the others as siblings — the structure is symmetric."
-- "If this is a single-repo project (REQs only ever originate here and never touch other repos), skip this step. ADLC skills fall back to single-repo behavior when no config or no siblings are declared."
+- "If this is a single-repo project (REQs only ever originate here and never touch other repos), leave `repos:` with the single primary entry. ADLC skills fall back to single-repo behavior when no siblings are declared."
 - "After editing, verify with `cat .adlc/config.yml` and make sure each sibling path resolves: `git -C <sibling-path> rev-parse --git-dir`."
-
-If the project is single-repo, skip the copy (no config file needed).
 
 ### Step 10: Summary
 1. Display the created directory structure

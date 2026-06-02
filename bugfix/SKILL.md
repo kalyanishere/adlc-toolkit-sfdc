@@ -61,45 +61,19 @@ Treat `<ARTIFACT_ROOT>` as **immutable** for the rest of the run. In cross-repo 
 
 ### Phase 1: Report
 1. If given a bug description (not a BUG ID), create a bug report:
-   - Determine the next BUG ID using the **global** atomic counter file `~/.claude/.global-next-bug` (shared across all repos for unique IDs, mirroring the REQ counter — see LESSON-004). Read the number, use it, and immediately write the incremented value back — using a POSIX `mkdir`-based lock to prevent concurrent collisions (works on macOS and Linux; `flock` is not available by default on macOS):
+   - Determine the next BUG ID using the canonical allocator partial. IDs are **per-project, namespaced by `project.shortname`** — `<XYZ>-BUG-NNN` (e.g., `SFC-BUG-014`). The counter lives at `<ARTIFACT_ROOT>/.adlc/.next-bug`. First allocation in a project bootstraps from the highest existing `<XYZ>-BUG-NNN` and legacy `BUG-NNN` under `.adlc/bugs/`, so re-running `/init` mid-project never resets to 1.
      ```bash
-     BUG_NUM=$(
-       LOCK=~/.claude/.global-next-bug.lock.d
-       COUNTER=~/.claude/.global-next-bug
-       if [ -L "$LOCK" ]; then
-         echo "ERROR: $LOCK is a symlink — refusing (TOCTOU risk). Inspect manually." >&2
-         exit 1
-       fi
-       for _ in $(seq 50); do mkdir "$LOCK" 2>/dev/null && break; sleep 0.1; done
-       # Hard-fail if we never acquired the lock (50 retries × 0.1s = ~5s budget).
-       # Without this guard, a contended lock would silently fall through to the
-       # critical section unguarded — defeating mutual exclusion (REQ-416 verify C1).
-       [ -d "$LOCK" ] || { echo "ERROR: failed to acquire $LOCK after 50 retries — aborting to avoid duplicate BUG id" >&2; exit 1; }
-       # Counter read inside lock — fail hard if the file disappears mid-critical-section
-       # rather than silently treating empty-as-zero and resetting the global counter (REQ-416 verify M2).
-       NUM=$(cat "$COUNTER" 2>/dev/null) || { echo "ERROR: counter $COUNTER unreadable inside lock — aborting" >&2; rmdir "$LOCK" 2>/dev/null; exit 1; }
-       [ -n "$NUM" ] || { echo "ERROR: counter $COUNTER is empty — aborting (would reset to 1)" >&2; rmdir "$LOCK" 2>/dev/null; exit 1; }
-       echo $((NUM + 1)) > "$COUNTER"
-       # rmdir is guarded by the same symlink check (residual TOCTOU window between
-       # check and rmdir is accepted risk per ADR-4 — see LESSON-014).
-       if [ ! -L "$LOCK" ]; then rmdir "$LOCK" 2>/dev/null; fi
-       echo $NUM
-     )
-     # `exit 1` inside the $(...) subshell terminates only the subshell — BUG_NUM
-     # would be silently empty. Guard the parent context (REQ-416 verify D-pass).
-     [ -n "$BUG_NUM" ] || { echo "ERROR: failed to allocate BUG number — aborting before writing malformed bug report" >&2; exit 1; }
+     cd "$ARTIFACT_ROOT"
+     . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+     BUG_ID=$(allocate_bug)
+     # `allocate_bug` runs in $(...). `return 1` from the partial only exits the
+     # subshell — guard the parent context (LESSON-015):
+     [ -n "$BUG_ID" ] || { echo "ERROR: failed to allocate BUG id — aborting before writing malformed bug report" >&2; exit 1; }
+     # Extract the numeric suffix when you need BUG_NUM in templates / paths:
+     BUG_NUM=${BUG_ID##*-}
      ```
-     If `~/.claude/.global-next-bug` doesn't exist, create it by scanning all `.adlc/bugs/` directories under the user's repos root for the highest `BUG-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent of the **main checkout** (use `$ARTIFACT_ROOT`, not cwd — a skill-isolation worktree's parent points at `.claude/worktrees/` and silently misses every actual repo):
-     ```bash
-     SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$ARTIFACT_ROOT/.." && pwd)}"
-     HIGHEST=$(find "$SCAN_ROOT" -path '*/.adlc/bugs/BUG-*' -type f 2>/dev/null \
-       | grep -oE 'BUG-[0-9]+' | sed 's/BUG-//' | sort -n | tail -1)
-     BUG_NUM=$(( ${HIGHEST:-0} + 1 ))
-     echo $((BUG_NUM + 1)) > ~/.claude/.global-next-bug
-     ```
-     If the scan finds nothing (genuinely first BUG across all repos), `HIGHEST` is empty — `BUG_NUM` defaults to 1. Bug reports are `.md` files so the scan uses `-type f`; the analogous REQ-counter scan in `/spec` uses `-type d` because REQ specs are directories (deliberate, do not "correct" to `-type d`).
-     Note: the legacy per-repo `.adlc/.next-bug` counter is **deprecated** and no longer consulted — existing files can be left in place but should not be read or written.
-   - Create `<ARTIFACT_ROOT>/.adlc/bugs/BUG-xxx-slug.md` (the primary repo for the bug — even when the fix lives in a sibling, the report stays here) using the template from `<ARTIFACT_ROOT>/.adlc/templates/bug-template.md`
+     The partial enforces `project.shortname` (must match `^[A-Z]{3}$`), `mkdir`-based lock with symlink pre-check (LESSON-014), empty-counter fail-loud guards, and a first-run bootstrap that scans `.adlc/bugs/` for the high-water mark across BOTH legacy and namespaced ids. The legacy machine-global `~/.claude/.global-next-bug` is no longer read or written.
+   - Create `<ARTIFACT_ROOT>/.adlc/bugs/<BUG_ID>-slug.md` (e.g., `SFC-BUG-014-account-merge-loses-tags.md`) — the primary repo for the bug, even when the fix lives in a sibling, the report stays here. Use the template from `<ARTIFACT_ROOT>/.adlc/templates/bug-template.md`
    - Fill in: description, reproduction steps (if known), expected vs actual behavior, environment
    - Set status to `open`, severity based on impact
    - **Cross-repo**: if `<ARTIFACT_ROOT>/.adlc/config.yml` declares siblings AND the bug's fix likely lives in a sibling (e.g., a frontend symptom whose root cause is in a backend repo), add a `repo: <sibling-id>` field to the bug frontmatter. If the fix spans multiple repos, add a `touched_repos: [<id>, <id>]` field. The `repo:` field determines where Phase 3's commit and Phase 4's PR land.
@@ -243,45 +217,17 @@ Evaluate honestly: did this bug reveal something a future implementer should kno
 - A check that would have caught this earlier?
 - An assumption from a prior REQ that turned out false?
 
-If yes, write a lesson to `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/LESSON-xxx-slug.md` using the **global** atomic counter `~/.claude/.global-next-lesson` (shared across all repos for unique IDs, mirroring the REQ/BUG counters — see LESSON-004), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014). The lock path `~/.claude/.global-next-lesson.lock.d` is shared with `/wrapup` so a concurrent `/bugfix` and `/wrapup` mutually exclude and cannot double-allocate the same LESSON id:
+If yes, write a lesson to `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/<LESSON_ID>-slug.md` using the canonical allocator partial. IDs are per-project, namespaced by `project.shortname` — `<XYZ>-LESSON-NNN`. The counter at `<ARTIFACT_ROOT>/.adlc/.next-lesson` and the lock at `.adlc/.next-lesson.lock.d` are shared with `/wrapup`'s lesson capture so concurrent `/bugfix` and `/wrapup` runs mutually exclude. First allocation in a project bootstraps from the highest existing `<XYZ>-LESSON-NNN` and legacy `LESSON-NNN`, never resets to 1.
 ```bash
-LESSON_NUM=$(
-  LOCK=~/.claude/.global-next-lesson.lock.d
-  COUNTER=~/.claude/.global-next-lesson
-  if [ -L "$LOCK" ]; then
-    echo "ERROR: $LOCK is a symlink — refusing (TOCTOU risk). Inspect manually." >&2
-    exit 1
-  fi
-  for _ in $(seq 50); do mkdir "$LOCK" 2>/dev/null && break; sleep 0.1; done
-  # Hard-fail if we never acquired the lock (50 retries × 0.1s = ~5s budget).
-  # Without this guard, a contended lock would silently fall through to the
-  # critical section unguarded — defeating mutual exclusion (REQ-416 verify C1).
-  [ -d "$LOCK" ] || { echo "ERROR: failed to acquire $LOCK after 50 retries — aborting to avoid duplicate LESSON id" >&2; exit 1; }
-  # Counter read inside lock — fail hard if the file disappears mid-critical-section
-  # rather than silently treating empty-as-zero and resetting the global counter (REQ-416 verify M2).
-  NUM=$(cat "$COUNTER" 2>/dev/null) || { echo "ERROR: counter $COUNTER unreadable inside lock — aborting" >&2; rmdir "$LOCK" 2>/dev/null; exit 1; }
-  [ -n "$NUM" ] || { echo "ERROR: counter $COUNTER is empty — aborting (would reset to 1)" >&2; rmdir "$LOCK" 2>/dev/null; exit 1; }
-  echo $((NUM + 1)) > "$COUNTER"
-  # rmdir is guarded by the same symlink check (residual TOCTOU window between
-  # check and rmdir is accepted risk per ADR-4 — see LESSON-014).
-  if [ ! -L "$LOCK" ]; then rmdir "$LOCK" 2>/dev/null; fi
-  echo $NUM
-)
-# `exit 1` inside the $(...) subshell terminates only the subshell — LESSON_NUM
-# would be silently empty. Guard the parent context (REQ-416 verify D-pass).
-[ -n "$LESSON_NUM" ] || { echo "ERROR: failed to allocate LESSON number — aborting before writing malformed lesson" >&2; exit 1; }
+cd "$ARTIFACT_ROOT"
+. .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+LESSON_ID=$(allocate_lesson)
+[ -n "$LESSON_ID" ] || { echo "ERROR: failed to allocate LESSON id — aborting before writing malformed lesson" >&2; exit 1; }
+LESSON_NUM=${LESSON_ID##*-}
 ```
-If `~/.claude/.global-next-lesson` doesn't exist, create it by scanning all `.adlc/knowledge/lessons/` directories under the user's repos root for the highest `LESSON-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent of the **main checkout** (use `$ARTIFACT_ROOT`, not cwd):
-```bash
-SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$ARTIFACT_ROOT/.." && pwd)}"
-HIGHEST=$(find "$SCAN_ROOT" -path '*/.adlc/knowledge/lessons/LESSON-*' -type f 2>/dev/null \
-  | grep -oE 'LESSON-[0-9]+' | sed 's/LESSON-//' | sort -n | tail -1)
-LESSON_NUM=$(( ${HIGHEST:-0} + 1 ))
-echo $((LESSON_NUM + 1)) > ~/.claude/.global-next-lesson
-```
-Lessons are `.md` files so the scan uses `-type f` (the `/spec` REQ-counter scan uses `-type d` because specs are directories — a deliberate sibling-substitution, do not "correct" to `-type d`). Use the counter ONLY thereafter — never re-scan after it exists. Note: the legacy per-repo `.adlc/.next-lesson` counter is **deprecated** and no longer consulted — existing files can be left in place but should not be read or written.
+The partial enforces `project.shortname` (`^[A-Z]{3}$`), `mkdir`-based lock with symlink pre-check (LESSON-014), empty-counter fail-loud guards (LESSON-015), and a first-run bootstrap that scans `.adlc/knowledge/lessons/` for the high-water mark across BOTH legacy and namespaced ids. The legacy machine-global `~/.claude/.global-next-lesson` is no longer read or written.
 
-Use the lesson template (`<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md`, fall back to `~/.claude/skills/templates/lesson-template.md`). Filename format is `LESSON-xxx-slug.md` only — no date prefixes, no bare-numeric prefixes. Include `domain`, `component`, and `tags` so future runs of `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance.
+Use the lesson template (`<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md`, fall back to `~/.claude/skills/templates/lesson-template.md`). Filename format is `<LESSON_ID>-slug.md` (e.g., `SFC-LESSON-014-static-vs-instance.md`). Slugs are lowercase kebab-case, ≤6 words. Include `domain`, `component`, and `tags` so future runs of `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance.
 
 If the bug genuinely produced no useful lesson (one-line typo, etc.), say so explicitly in the final summary — don't silently skip.
 

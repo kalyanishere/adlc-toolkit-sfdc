@@ -1,5 +1,5 @@
 ---
-id: BUG-xxx
+id: XYZ-BUG-001       # `<project.shortname>-BUG-NNN` from .adlc/config.yml; allocated by /bugfix Phase 1 via partials/id-counter.sh
 title: "Bug Title"
 status: open
 severity: critical | high | medium | low

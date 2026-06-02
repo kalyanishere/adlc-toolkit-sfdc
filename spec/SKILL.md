@@ -116,45 +116,26 @@ Run a weighted-score retrieval over three corpora using the query from Step 1.5.
 9. **Cold-start path**: if every corpus is empty, or all candidates filter out to zero, skip retrieval and record this explicitly when Step 3 writes the `## Retrieved Context` section. Proceed to authoring without retrieved bodies.
 
 ### Step 2: Determine the Next REQ ID
-1. Use the **global** atomic counter file `~/.claude/.global-next-req` (shared across all repos for unique IDs)
-2. Read the number, use it as the REQ ID, and **immediately** write the incremented value back — using a POSIX `mkdir`-based lock to prevent concurrent collisions (works on macOS and Linux; `flock` is not available by default on macOS):
+
+Allocation is **per-project, namespaced by `project.shortname` from `.adlc/config.yml`** — IDs look like `<XYZ>-REQ-NNN` (e.g., `SFC-REQ-007`). The counter lives at `.adlc/.next-req` inside the project. First allocation in a project bootstraps from the highest existing `<XYZ>-REQ-NNN` (and legacy `REQ-NNN`) found under `.adlc/specs/` so re-running `/init` mid-project never resets to 1.
+
+1. Source the canonical allocator partial and request the next REQ id:
    ```bash
-   REQ_NUM=$(
-     LOCK=~/.claude/.global-next-req.lock.d
-     COUNTER=~/.claude/.global-next-req
-     if [ -L "$LOCK" ]; then
-       echo "ERROR: $LOCK is a symlink — refusing (TOCTOU risk). Inspect manually." >&2
-       exit 1
-     fi
-     for _ in $(seq 50); do mkdir "$LOCK" 2>/dev/null && break; sleep 0.1; done
-     # Hard-fail if we never acquired the lock (50 retries × 0.1s = ~5s budget).
-     # Without this guard, a contended lock would silently fall through to the
-     # critical section unguarded — defeating mutual exclusion (REQ-416 verify C1).
-     [ -d "$LOCK" ] || { echo "ERROR: failed to acquire $LOCK after 50 retries — aborting to avoid duplicate REQ id" >&2; exit 1; }
-     # Counter read inside lock — fail hard if the file disappears mid-critical-section
-     # rather than silently treating empty-as-zero and resetting the global counter (REQ-416 verify M2).
-     NUM=$(cat "$COUNTER" 2>/dev/null) || { echo "ERROR: counter $COUNTER unreadable inside lock — aborting" >&2; rmdir "$LOCK" 2>/dev/null; exit 1; }
-     [ -n "$NUM" ] || { echo "ERROR: counter $COUNTER is empty — aborting (would reset to 1)" >&2; rmdir "$LOCK" 2>/dev/null; exit 1; }
-     echo $((NUM + 1)) > "$COUNTER"
-     # rmdir is guarded by the same symlink check (residual TOCTOU window between
-     # check and rmdir is accepted risk per ADR-4 — see LESSON-014).
-     if [ ! -L "$LOCK" ]; then rmdir "$LOCK" 2>/dev/null; fi
-     echo $NUM
-   )
-   # `exit 1` inside the $(...) subshell terminates only the subshell — REQ_NUM
-   # would be silently empty. Guard the parent context (REQ-416 verify D-pass).
-   [ -n "$REQ_NUM" ] || { echo "ERROR: failed to allocate REQ number — aborting before writing malformed spec" >&2; exit 1; }
+   . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+   REQ_ID=$(allocate_req)
+   # `allocate_req` runs in $(...). `return 1` from the partial only exits the
+   # subshell — guard the parent context (LESSON-015):
+   [ -n "$REQ_ID" ] || { echo "ERROR: failed to allocate REQ id — aborting before writing malformed spec" >&2; exit 1; }
+   # Extract the numeric suffix when you need REQ_NUM in templates / paths:
+   REQ_NUM=${REQ_ID##*-}
    ```
-3. If `~/.claude/.global-next-req` does not exist, create it by scanning all `.adlc/specs/` directories under the user's repos root for the highest `REQ-xxx` number, use the next one, and write the number after that. The scan root is `$ADLC_REPOS_ROOT` if set, otherwise the parent directory of the current repo (which catches the common "all repos under one folder" layout). Use `grep -oE` + `sed` (BSD-compatible) instead of `grep -oP` (GNU-only):
-   ```bash
-   SCAN_ROOT="${ADLC_REPOS_ROOT:-$(cd "$(git rev-parse --show-toplevel)/.." && pwd)}"
-   HIGHEST=$(find "$SCAN_ROOT" -path '*/.adlc/specs/REQ-*' -type d 2>/dev/null \
-     | grep -oE 'REQ-[0-9]+' | sed 's/REQ-//' | sort -n | tail -1)
-   REQ_NUM=$(( ${HIGHEST:-0} + 1 ))
-   echo $((REQ_NUM + 1)) > ~/.claude/.global-next-req
-   ```
-   If the scan finds nothing (genuinely first REQ across all repos), `HIGHEST` is empty — REQ_NUM defaults to 1.
-4. The `mkdir` lock ensures that concurrent `/sprint` sessions don't read the same counter value. `mkdir` is atomic on all POSIX filesystems — if another process holds the lock, the retry loop waits up to ~5 seconds.
+2. The partial enforces:
+   - `project.shortname` present in `.adlc/config.yml` and matching `^[A-Z]{3}$` — hard fail otherwise.
+   - POSIX `mkdir`-based lock at `.adlc/.next-req.lock.d` with `[ -L ]` symlink pre-check (LESSON-014).
+   - Empty/missing counter inside the lock fails loud (never silently resets).
+   - First-run bootstrap scans `.adlc/specs/` for the highest existing id (matches BOTH `<XYZ>-REQ-NNN` and legacy `REQ-NNN`) and seeds the counter at `high-water + 1`. Result: `/init` after specs already exist resumes numbering, never restarts at 1.
+3. `mkdir` is atomic on all POSIX filesystems — if another process holds the lock the retry loop waits up to ~5 seconds. Concurrent `/sprint` allocations get distinct IDs.
+4. **Migrating from the legacy global counter**: the old `~/.claude/.global-next-req` is no longer read or written. New IDs are project-scoped via the shortname; existing un-namespaced specs (`REQ-475-foo`) keep their names — the bootstrap reads them so the next id picks up above their high-water mark.
 
 ### Step 2.5: Pick the complexity tier (REQ-C)
 
@@ -174,7 +155,7 @@ Set `complexity:` in the spec's frontmatter. When in doubt, pick the **higher** 
 In **interactive mode**, surface the proposed tier and let the user override. In **non-interactive / pipeline mode** (caller passed an explicit value, or running inside a subagent), accept the caller's value verbatim; if absent, use `small` as the safe default.
 
 ### Step 3: Create the Requirement Spec
-1. Create directory: `.adlc/specs/REQ-xxx-feature-slug/`
+1. Create directory: `.adlc/specs/<REQ_ID>-feature-slug/` where `<REQ_ID>` is the value returned by `allocate_req` in Step 2 (e.g., `.adlc/specs/SFC-REQ-007-add-payment-flow/`). The directory name MUST start with the full namespaced id, including the shortname prefix.
 2. Create `requirement.md` using the template from `.adlc/templates/requirement-template.md`
 3. Fill in all sections:
    - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., iOS-only or docs-only), `complexity` (from Step 2.5), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags`. This self-tagging makes the new REQ retrievable for future `/spec` invocations (per REQ-258 BR-7).

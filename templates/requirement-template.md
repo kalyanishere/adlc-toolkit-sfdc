@@ -1,5 +1,5 @@
 ---
-id: REQ-xxx
+id: XYZ-REQ-001       # `<project.shortname>-REQ-NNN` from .adlc/config.yml; allocated by /spec Step 2 via partials/id-counter.sh
 title: "Feature Title"
 status: draft
 deployable: true
