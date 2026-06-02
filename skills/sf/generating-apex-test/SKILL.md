@@ -195,6 +195,7 @@ Load on demand for detailed patterns:
 
 | Reference | When to use |
 |-----------|-------------|
+| **[references/test-pitfalls.md](references/test-pitfalls.md)** | **READ FIRST.** Catalog of compile/runtime traps AI agents hit when writing Apex tests — `@TestSetup` semantics, `Test.startTest/stopTest` async behavior, `System.runAs` rules, mixed-DML, mock registration order, `Assert.*` vs deprecated `System.assert*`, REST/Continuation patterns. Cite by ID (TP-NN) when fixing. |
 | [references/test-data-factory.md](references/test-data-factory.md) | TestDataFactory patterns, field overrides, duplicate rule handling |
 | [references/assertion-patterns.md](references/assertion-patterns.md) | Assertion best practices, anti-patterns, common pitfalls |
 | [references/mocking-patterns.md](references/mocking-patterns.md) | HttpCalloutMock, DML mocking, StubProvider, SOSL, Email, Platform Events |

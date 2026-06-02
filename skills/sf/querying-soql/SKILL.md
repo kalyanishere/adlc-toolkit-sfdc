@@ -40,6 +40,9 @@ Ask for or infer:
 
 ## Recommended Workflow
 
+### 0. Read pitfalls first (always)
+Before authoring or reviewing any non-trivial SOQL, read [references/soql-pitfalls-and-limits.md](references/soql-pitfalls-and-limits.md) — the catalog of compile/runtime traps AI agents most often produce (date literals, `LIKE`/`%`, `WITH USER_MODE`, `OFFSET` cap, polymorphic `TYPEOF`, semi-/anti-join restrictions, parent-traversal cap, `IN :emptyCollection`, compound-field `WHERE`, etc.). Cite by ID (`SQ-NN`) when fixing a finding.
+
 ### 1. Generate the simplest correct query
 Prefer:
 - only needed fields
@@ -127,6 +130,7 @@ Next step: <run in handling-sf-data or embed in Apex>
 
 | File | When to read |
 |------|-------------|
+| **`references/soql-pitfalls-and-limits.md`** | **READ FIRST.** Compile/runtime traps AI agents hit — `SELECT *`, date literals, wildcards, `WITH USER_MODE`, `OFFSET` cap, polymorphic `TYPEOF`, semi-/anti-join restrictions, parent traversal cap, empty `IN :coll`, compound-field `WHERE`, etc. Cite by ID (SQ-NN) when fixing. |
 | `references/soql-syntax-reference.md` | Syntax, operators, date literals, relationship query patterns |
 | `references/query-optimization.md` | Selectivity rules, indexing strategy, governor limits, security patterns |
 | `references/soql-reference.md` | Quick reference — operators, date functions, aggregate functions, WITH clauses |

@@ -44,6 +44,7 @@ All steps are sequential. Do not skip, merge, or reorder. If blocked, stop and a
 2. **Choose the smallest correct pattern** (see Type-Specific Guidance below)
 
 3. **Review templates and assets**
+   - **READ FIRST**: [references/apex-syntax-pitfalls.md](references/apex-syntax-pitfalls.md) — catalog of compile/runtime traps AI agents make (sharing, AccessLevel, dynamic SOQL, `@AuraEnabled`, async, governor lookups, `Map<SObject,…>` equality, JSON deserialization, etc.). Cite by ID (`AP-NN`) when fixing.
    - Read the matching template from `assets/` before authoring (see Type-Specific Guidance for the file mapping)
    - When a `references/` example exists for the type, read it as a concrete style guide
    - For any test class work, always read and use `generating-apex-test` skill
