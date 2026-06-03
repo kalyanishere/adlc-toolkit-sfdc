@@ -115,6 +115,118 @@ Run a weighted-score retrieval over three corpora using the query from Step 1.5.
 
 9. **Cold-start path**: if every corpus is empty, or all candidates filter out to zero, skip retrieval and record this explicitly when Step 3 writes the `## Retrieved Context` section. Proceed to authoring without retrieved bodies.
 
+### Step 1.7: Exclude Org-Config Layers (never pipeline these)
+
+Some Salesforce artifacts are **org-config**, not code, and pipelining them is more expensive than running them by hand in Setup — secrets leak into metadata, OAuth callbacks need approval flows, certificates rotate on a different cadence, and a failed deploy on any of them blocks the whole feature for an hour while a human untangles it.
+
+**These artifacts are NEVER child REQs and NEVER appear in `Files to Create/Modify`:**
+
+- Connected Apps / External Client Apps
+- Named Credentials + their External Credentials
+- Auth Providers
+- Certificates & Key Management entries
+- Remote Site Settings (legacy)
+- License & feature-license assignments
+
+**What to do instead** when the feature request implies any of the above (e.g., "call the Stripe API", "OAuth into ServiceNow", "sign outbound JWTs"):
+
+1. Do NOT spawn a child REQ for the org-config artifact.
+2. Add the artifact to the spec's `## Assumptions` section in the form: `<ArtifactType> '<Name>' is pre-created in the target org's Setup before deploy starts.` Be specific — name the Connected App, the Named Credential, the certificate alias, etc., so `/canary` can verify presence.
+3. Add the artifact to `## External Dependencies` so the gate in `/canary` Step 2a can read it.
+4. If the user's request is *exclusively* about org-config (e.g., "create a Named Credential for X"), tell the user: *"Connected Apps, Named Credentials, Auth Providers, and Certificates are intentionally excluded from the ADLC pipeline. Create this in Setup directly — it's a 2-minute click-through and avoids exposing secrets in metadata."* Do NOT allocate a REQ.
+
+This rule overrides the general decomposition heuristic — even if the user explicitly asks for the org-config artifact in a deployable form, refuse and route to Setup.
+
+### Step 1.8: Decompose Multi-Layer Requests
+
+A single Salesforce feature request often spans multiple layers — Apex service, LWC, perm-set, FlexiPage placement — and bundling them into one REQ inflates complexity tier, balloons the review panel, mixes declarative with programmatic work, and forces every layer to ride the slowest one's gates. Decompose at the spec phase so each layer can be tested, reviewed, and shipped independently.
+
+#### Step 1.8.1 — Detect layers
+
+After Step 1.7 has stripped any org-config references, classify the **remaining** scope against this Salesforce-specific cleavage table:
+
+| Layer | Signals in the request |
+|---|---|
+| `apex-service` | "service class", "helper", "selector", SOQL/DML logic, callable from elsewhere |
+| `apex-trigger` | "when X is created/updated", before/after insert/update/delete, record-change automation |
+| `apex-batch-async` | "nightly", "process N records", "queueable", "@future", "Schedulable", "Batchable" |
+| `apex-rest-callout` | inbound `@RestResource`, outbound `Http.send` against a Named Credential |
+| `lwc-component` | "card on the record page", "modal", "form", any reusable Lightning Web Component |
+| `react-bundle` | `ReactInternalApp` / `ReactExternalApp` (requires `salesforce.features.ui_bundles: true`) |
+| `flow-screen` | guided UI, screen flow, multi-step wizard with no LWC |
+| `flow-record-triggered` | record-triggered flow / autolaunched flow |
+| `omniscript` | OmniStudio OmniScript / FlexCard / IP / DataRaptor |
+| `agentforce-topic` | Agent topics, Actions, conversation flows |
+| `data-cloud` | DLO / DMO / CIO / segment / activation |
+| `permset` | declarative — perm-set membership, FLS, object/tab visibility |
+| `flexipage` | declarative — record page / app page / home page placement of components |
+| `custom-metadata` | CMDT records (configuration data, not code) |
+| `custom-object` | new sObject + fields (often a precondition for service/UI work) |
+
+Tag every layer the request implies. A layer that only exists to *use* an artifact from another layer (e.g., a FlexiPage that hosts a new LWC) is a separate layer — that's the whole point of decomposing.
+
+#### Step 1.8.2 — Decide whether to decompose
+
+- **Single layer detected** → do NOT decompose. Continue to Step 2 with one REQ. Today's behavior.
+- **Two or more layers detected** → propose a decomposition (Step 1.8.3). The exception below still applies.
+
+**Declarative-only layers (`permset`, `flexipage`, `custom-metadata`)** that ride alongside code layers should usually be **routed to Setup, not pipelined**. They take seconds for a human to click together, they don't benefit from review-panel scrutiny, and pinning a code REQ behind their deploy adds 5-15 minutes of orchestration per layer for no quality gain. Prefer this routing unless the project explicitly tracks declarative changes through the pipeline (e.g., regulated industries with full audit trails).
+
+Treat these layers like the org-config artifacts in Step 1.7: capture them as a Setup hand-off note, not a child REQ:
+
+> *Permission set `Acme_Sales_Manager` field-level grant for the new field is excluded from the pipeline — apply it directly in Setup. FlexiPage placement of the new LWC on the Opportunity record page is excluded — drag the component in App Builder once the LWC REQ deploys.*
+
+When the user explicitly insists a declarative layer be pipelined (e.g., "I want the perm-set in source control for audit"), allocate it as a child REQ with `complexity: trivial` so it gets the cheapest phase shape.
+
+#### Step 1.8.3 — Propose the decomposition
+
+Build a child-REQ plan from the surviving (non-Setup-routed) layers. For each layer:
+
+- **Title**: `<Layer purpose> <object/feature>` — e.g., `Opportunity score Apex service`, `Opportunity score LWC widget`.
+- **Layer tag**: the layer key from Step 1.8.1 — recorded in the spec's `tags:` frontmatter.
+- **Complexity (Step 2.5 preview)**: `trivial` for any pipelined declarative layer; `small` for a single Apex class + its test, a single LWC + its Jest, a single Flow; `medium` if the layer introduces a new pattern (new trigger handler, new sObject, first integration); `large` only when the layer itself spans cross-domain work.
+- **Dependencies**: order layers by what consumes what. Typical chains:
+  - `custom-object` → `apex-service` → `apex-trigger` (if any) → `lwc-component` / `flow-screen`
+  - `apex-rest-callout` → `apex-service` (if the service wraps the callout) → consumer layer
+  - `data-cloud` DLO → DMO → activation → consumer
+
+Surface the plan to the user in **interactive mode** (manual `/spec` invocation):
+
+```
+Proposed decomposition for "<feature request>":
+
+  <id-1>  <Title 1>            [<complexity>, <layer>]
+  <id-2>  <Title 2>            [<complexity>, <layer>, depends: <id-1>]
+  <id-3>  <Title 3>            [<complexity>, <layer>, depends: <id-2>]
+
+Routed to Setup (NOT pipelined — do these by hand):
+  - Permission set 'X' field grant
+  - FlexiPage placement of the LWC on <RecordPage>
+
+Confirm to allocate, edit titles/order, or reply 'collapse' to bundle into one REQ.
+```
+
+Wait for confirmation. Acceptable replies:
+- `confirm` / silence-with-affirmation → proceed with the plan as shown.
+- `collapse` → fall back to a single REQ; treat the original request as one unit. Note in `## Out of Scope` that the layers were considered and bundled deliberately.
+- `edit <free text>` → apply the user's adjustments (rename, reorder, drop a child) and re-surface.
+
+In **non-interactive / pipeline mode** (same detection rules as Step 1.5 sub-step 4 — caller-supplied tags, "invoked from /proceed" / "pipeline mode" hints, or subagent dispatch with no user channel): default to **collapse** (single REQ, today's behavior). Decomposition is a deliberate, user-confirmed choice; never silently fan a `/proceed` invocation into N REQs without the user opting in. The user can re-run `/spec` interactively if they want the plan.
+
+#### Step 1.8.4 — Allocate the children
+
+When the plan is confirmed:
+
+1. Loop Step 2 (REQ-ID allocation) **once per child REQ** — each gets its own `<XYZ>-REQ-NNN` id from `allocate_req`.
+2. For each child, execute Step 2.5 with the layer's pre-decided complexity (override only if Step 2.5's heuristic disagrees by more than one tier — then surface the disagreement).
+3. Run Step 3 once per child to write `requirement.md`. Each child's frontmatter MUST include:
+   - `dependencies: [<parent or sibling REQ ids>]` — the ordering edges from the plan.
+   - A `## Decomposition Context` section directly after `## Description` listing the parent feature request, the sibling REQ ids, and which layer this child owns. This makes each child self-describing for retrieval and review.
+4. Each child carries the **same** retrieval-context block from Step 1.6 — they share the parent feature's grounding.
+5. Skip the standalone presentation in Step 4; instead, after all children are written, present the full set together and report the dependency graph (one line per child with its `depends:` chain). Tell the user the next move is `/sprint <id-1> <id-2> ...` (which will run them in parallel up to the dependency edges) or `/proceed <id-1>` (which will run a single child).
+
+When the plan was **collapsed** to a single REQ, this step is a no-op — Steps 2 / 2.5 / 3 run once as today.
+
 ### Step 2: Determine the Next REQ ID
 
 Allocation is **per-project, namespaced by `project.shortname` from `.adlc/config.yml`** — IDs look like `<XYZ>-REQ-NNN` (e.g., `SFC-REQ-007`). The counter lives at `.adlc/.next-req` inside the project. First allocation in a project bootstraps from the highest existing `<XYZ>-REQ-NNN` (and legacy `REQ-NNN`) found under `.adlc/specs/` so re-running `/init` mid-project never resets to 1.
@@ -155,25 +267,30 @@ Set `complexity:` in the spec's frontmatter. When in doubt, pick the **higher** 
 In **interactive mode**, surface the proposed tier and let the user override. In **non-interactive / pipeline mode** (caller passed an explicit value, or running inside a subagent), accept the caller's value verbatim; if absent, use `small` as the safe default.
 
 ### Step 3: Create the Requirement Spec
+
+**Loop note (decomposition)**: when Step 1.8 proposed a multi-REQ decomposition that the user confirmed, run all of Step 3 **once per child REQ** — each child gets its own directory, frontmatter, and body. Children share the retrieval context from Step 1.6 but carry their own layer-specific tags, dependencies, and complexity tier. When Step 1.8 collapsed (or did not trigger), Step 3 runs exactly once.
+
 1. Create directory: `.adlc/specs/<REQ_ID>-feature-slug/` where `<REQ_ID>` is the value returned by `allocate_req` in Step 2 (e.g., `.adlc/specs/SFC-REQ-007-add-payment-flow/`). The directory name MUST start with the full namespaced id, including the shortname prefix.
 2. Create `requirement.md` using the template from `.adlc/templates/requirement-template.md`
 3. Fill in all sections:
-   - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., iOS-only or docs-only), `complexity` (from Step 2.5), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags`. This self-tagging makes the new REQ retrievable for future `/spec` invocations (per REQ-258 BR-7).
+   - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., iOS-only or docs-only), `complexity` (from Step 2.5), `dependencies` (sibling/parent REQ ids when this REQ was allocated as a child in Step 1.8.4 — empty list otherwise), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags` (the layer key from Step 1.8.1 is appended to `tags` for decomposed children, e.g., `apex-service`, `lwc-component`). This self-tagging makes the new REQ retrievable for future `/spec` invocations (per REQ-258 BR-7).
    - **Description**: What the feature does and why — be specific and grounded in the project context
    - **System Model**: Structured data model — Entities (fields, types, constraints), Events (triggers, payloads), Permissions (actions, roles). Remove sub-sections that don't apply to this feature.
    - **Business Rules**: Explicit, testable constraints governing behavior (e.g., "Only item owner can delete"). Numbered BR-1, BR-2, etc.
    - **Acceptance Criteria**: Concrete, testable criteria as checkboxes
-   - **External Dependencies**: Any new APIs, services, or libraries needed
-   - **Assumptions**: Things assumed to be true that could affect the design
+   - **External Dependencies**: Any new APIs, services, or libraries needed. If the feature talks to an external system, list the Named Credential / External Credential / Auth Provider / Certificate / Connected App that brokers it — these are excluded from the pipeline per Step 1.7 and must already exist in the target org.
+   - **Assumptions**: Things assumed to be true that could affect the design. If Step 1.7 routed any org-config artifact here, the assumption MUST follow the form: `<ArtifactType> '<Name>' is pre-created in the target org's Setup before deploy starts.`
    - **Open Questions**: Questions that need answers before implementation
    - **Out of Scope**: Items explicitly excluded to prevent scope creep
    - **Retrieved Context** (NEW, always present): append a `## Retrieved Context` section at the end of the spec listing every retrieved source from the retrieval summary produced in Step 1.6 in the form `ID (corpus, score): title`. If no context was retrieved (cold-start path — either the corpus is empty or no documents scored above zero), write exactly: `No prior context retrieved — no tagged documents matched this area.`
 4. **Inline citations**: when a retrieved doc directly informed a Business Rule, Assumption, or Acceptance Criterion, add an inline citation in the form `(informed by BUG-012)` or `(informed by REQ-019, LESSON-034)` at the end of that line. Citations are required when the retrieved doc is load-bearing for the rule; optional when the doc was background reading only.
 
 ### Step 4: Present for Review
-1. Display the full requirement spec to the user
-2. Highlight any assumptions or open questions that need input
-3. Remind the user to run `/validate` before advancing to `/architect`
+1. Display the full requirement spec to the user. When Step 1.8 produced multiple children, display each child briefly and then a **dependency graph summary** of the form `<id-1> → <id-2> → <id-3>` (chains) or a small DAG when fan-out exists.
+2. Highlight any assumptions or open questions that need input.
+3. Remind the user of next moves:
+   - Single REQ: run `/validate` then `/architect`.
+   - Decomposed (multiple children): run `/validate <id>` per child, then `/sprint <id-1> <id-2> ...` to run them in parallel respecting `dependencies:`, or `/proceed <id-1>` to run one at a time. Setup-routed declarative items (perm-set / FlexiPage from Step 1.8.2) need the user to wire them in App Builder once their producer REQ deploys — call those out explicitly here so they aren't forgotten.
 
 ## Quality Checklist
 - [ ] Acceptance criteria are specific and testable (not vague)
@@ -182,3 +299,7 @@ In **interactive mode**, surface the proposed tier and let the user override. In
 - [ ] Out of scope items prevent scope creep
 - [ ] No implementation details leaked into the requirement (that's for architecture phase)
 - [ ] Retrieved Context section present
+- [ ] No Connected App, Named/External Credential, Auth Provider, Certificate, Remote Site Setting, or License assignment appears as a deliverable — each is captured as a pre-deploy assumption per Step 1.7
+- [ ] If the request spans ≥2 layers from Step 1.8.1, a decomposition was proposed and either confirmed (children allocated with `dependencies:`) or explicitly collapsed by the user
+- [ ] Declarative-only layers (permset, FlexiPage, custom-metadata) are routed to Setup unless the user opted to pipeline them — and when pipelined, they sit at `complexity: trivial`
+- [ ] Each decomposed child has its layer key recorded in `tags:` and a `## Decomposition Context` section linking parent and siblings

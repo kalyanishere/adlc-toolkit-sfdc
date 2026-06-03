@@ -371,7 +371,44 @@ For each touched repo, run the reflector checklist, then correctness, quality, a
 
 **Step D — Re-verify (conditional)**: Re-run ONLY the 5 reviewer agents (not reflector) if Critical or must-fix Major items were fixed — up to 1 confirmation loop. Skip if only minor fixes were applied. Scope re-verify to the (repo, dimension) pairs that had fixes: e.g., if correctness fixes landed only in the api repo, rerun correctness-reviewer for that repo only. In subagent mode, re-run the corresponding reviewer checklists inline.
 
-**End-of-phase log**: Emit the combined verify summary across repos — per-repo findings, dedupe count, how many fixed, any deferred. If reflector surfaced user-facing questions, halt here (legitimate halt #2). Otherwise continue to Phase 6.
+**Step E — Platform validate (Salesforce ground-truth gate)**: Static review reasons about the code; the platform compiler is the only oracle that catches metadata-shape errors, Apex compile errors, missing fields, malformed FlexiPage XML, UI Bundle dist/ omissions, and feature-flag-gated metadata that exists in docs but not your org. Run a `sf project deploy validate` against the lowest-tier configured org **after** static fixes have been applied and **before** opening a PR. This step is mandatory whenever the project is a Salesforce project and at least one touched repo has Salesforce metadata in its diff — it is NOT gated by `complexity` (a `trivial` change can still ship broken metadata).
+
+For each touched repo whose diff contains Salesforce metadata (any path under `force-app/`, or whatever `salesforce.workspace:` is set to in `.adlc/config.yml`), run inside that repo's worktree:
+
+```sh
+# Resolve the validation org. Order: salesforce.validate_org → orgs.sandbox → orgs.scratch.
+ALIAS=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*validate_org:/{print $2; exit}' .adlc/config.yml | tr -d '"')
+[ -z "$ALIAS" ] && ALIAS=$(awk '/^[[:space:]]*orgs:/{f=1} f && /^[[:space:]]*sandbox:/{print $2; exit}' .adlc/config.yml | tr -d '"')
+[ -z "$ALIAS" ] && ALIAS=$(awk '/^[[:space:]]*orgs:/{f=1} f && /^[[:space:]]*scratch:/{print $2; exit}' .adlc/config.yml | tr -d '"')
+
+# Resolve --test-level by reusing /canary Step 2b's diff-aware logic. Default to NoTestRun
+# when the diff is metadata-only (saves 5-10 min per validate); RunSpecifiedTests when only
+# a few Apex classes changed; RunLocalTests as a safe fallback.
+APEX_TOUCHED=$(git diff --name-only "origin/${integrationBranch:-main}...HEAD" | grep -E '\.(cls|trigger)$' | grep -vE '(Test|_Test)\.cls$' || true)
+if [ -z "$APEX_TOUCHED" ]; then TEST_LEVEL="NoTestRun"; else TEST_LEVEL="RunLocalTests"; fi
+
+WORKSPACE=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*workspace:/{print $2; exit}' .adlc/config.yml | tr -d '"')
+WORKSPACE=${WORKSPACE:-force-app}
+
+sf project deploy validate \
+  --target-org "$ALIAS" \
+  --source-dir "$WORKSPACE" \
+  --test-level "$TEST_LEVEL" \
+  --wait 30 \
+  --json
+```
+
+**Outcome handling:**
+
+1. **Clean validate** (status `Succeeded`, `checkOnly=true`, no component failures, no test failures): write `phase5.platformValidate[<repo-id>] = { status: "passed", validationId: <id>, alias: <alias>, testLevel: <level>, runAt: <ts> }` to `pipeline-state.json` and proceed.
+2. **Validation failed** (compile errors, missing component, FLS error, malformed metadata, test failure): treat every failure entry as a **Critical finding** and loop back to Step C with the platform's error report inlined. Up to **2 retries** of the C → D → E cycle. Each retry MUST run all of Steps C → D → E in order — do not skip D between attempts because the platform errors only surfaced in E. After the second failed retry, the failure is legitimate halt #2 (same handling as reflector questions): stop, surface the validation id, the failing components, the test failures, and the verbatim platform error to the user.
+3. **No validation org configured** (`salesforce.validate_org`, `orgs.sandbox`, and `orgs.scratch` all absent): record `phase5.platformValidate[<repo-id>] = { status: "skipped", reason: "no validation org configured" }` in `pipeline-state.json`. Do NOT proceed silently — surface a one-line warning in the Phase 5 end-of-phase log: `WARN: platform validate skipped — configure salesforce.validate_org or orgs.sandbox in .adlc/config.yml to enable Salesforce ground-truth gate.` This is intentional (a hard fail would block local-only projects), but must NEVER be a silent skip.
+4. **No Salesforce metadata in this repo's diff** (the touched paths are all docs/tests/non-SF code): mark `phase5.platformValidate[<repo-id>] = { status: "n/a", reason: "no SF metadata in diff" }` and proceed. This is the only legitimate quiet skip.
+5. **`sf` CLI absent or unauthenticated**: surface a Critical finding immediately — this is a setup gap, not a code problem. Do NOT loop. `phase5.platformValidate[<repo-id>] = { status: "tooling-error", reason: "<error>" }`. The user fixes their environment and reruns `/proceed`.
+
+**Why this gate exists**: every static reviewer (correctness, quality, architecture, test-auditor, security) reasons about source code in isolation. None of them can detect: an `.app-meta.xml` extension that should be `.uibundle-meta.xml`; a UI Bundle that ships without `dist/`; a permset referencing a field that exists only on a feature-flagged Edition; a FlexiPage with an invalid `template` ref; an Apex class compiled against a newer API version than the org supports; an OmniStudio component referencing a missing DataPack. The platform validate is the ground-truth oracle and runs in ~30-90s — cheap relative to the cost of catching these only in Phase 7 CI or post-merge.
+
+**End-of-phase log**: Emit the combined verify summary across repos — per-repo findings, dedupe count, how many fixed, any deferred — followed by a per-repo `Platform validate: ✓ passed (id <validation-id>) | ⚠ skipped (no org) | ✗ failed (N components, M tests)` line. If reflector surfaced user-facing questions, halt here (legitimate halt #2). If platform validate failed twice, halt here (also legitimate halt #2). Otherwise continue to Phase 6.
 
 ---
 

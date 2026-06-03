@@ -4,6 +4,7 @@ title: "Feature Title"
 status: draft
 deployable: true
 complexity: small   # trivial | small | medium | large — drives /proceed phase shape (REQ-C)
+dependencies: []    # other REQ ids this one waits on (set by /spec Step 1.8.4 when decomposed; empty for standalone REQs). /sprint respects these edges.
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 component: ""       # narrow area, e.g., "API/auth", "iOS/SwiftUI", "adlc/spec"
@@ -32,6 +33,15 @@ tags: []            # free-form keywords, e.g., ["password-reset", "tokens"]
 ## Description
 
 What the feature does and why.
+
+## Decomposition Context
+
+_Present only when this REQ was allocated as a child of a multi-layer feature decomposition (`/spec` Step 1.8). Delete this section for standalone REQs._
+
+- **Parent feature request:** [the original prompt the user gave to `/spec`]
+- **Layer this REQ owns:** [layer key from `/spec` Step 1.8.1, e.g., `apex-service`]
+- **Sibling REQs:** [list other child REQ ids and their layers]
+- **Setup hand-offs (declarative work the user does by hand):** [perm-set names, FlexiPage placements, etc., or "none"]
 
 ## Frontend framework
 
@@ -79,9 +89,17 @@ _Explicit, testable constraints governing this feature's behavior._
 
 - None
 
+<!--
+  Org-config artifacts (Connected Apps, Named Credentials, External Credentials,
+  Auth Providers, Certificates, Remote Site Settings, License assignments) are
+  NEVER pipelined — they live in Setup, not metadata. If this feature needs any
+  of them, list each one above by exact name, then mirror it as a pre-deploy
+  assumption below. /canary Step 2a verifies presence before deploy.
+-->
+
 ## Assumptions
 
-- None
+- Any required Connected Apps, Named Credentials, External Credentials, Auth Providers, and Certificates are pre-created in the target org's Setup before deploy starts. The pipeline will not create or modify them. List each artifact by exact name in External Dependencies above so `/canary` can verify presence.
 
 ## Open Questions
 

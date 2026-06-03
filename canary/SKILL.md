@@ -91,7 +91,32 @@ sh tools/sf-preflight/check.sh metadata --workspace force-app
 
 This pass requires no org access, so always run it.
 
-If either pre-flight pass exits non-zero (BLOCK findings), **STOP** — surface the findings verbatim and refuse to call `sf project deploy validate`. Each finding is actionable. The user fixes the metadata and re-runs `/canary`. WARN-level findings (e.g., unknown-object heuristic, missing-custom-field on a layout) surface in the report but do not block — they're often false positives on cross-package deploys.
+**Pass 3 — org-config presence (the "never pipeline these" gate)** — verifies that every Connected App, Named Credential, External Credential, Auth Provider, Certificate, Remote Site Setting, and License referenced by the spec exists in the target org *before* the deploy runs. These artifacts are intentionally excluded from the pipeline (`/spec` Step 1.7) — they live in Setup. This gate converts the spec's pre-deploy assumption into a verified precondition so a deploy that depends on a missing Named Credential fails here in seconds rather than mid-deploy with a confusing FieldIntegrity error.
+
+```sh
+SPEC=$(ls .adlc/specs/REQ-${REQ_NUM}-*/requirement.md 2>/dev/null | head -1)
+[ -n "$SPEC" ] || { echo "no REQ spec found — skipping org-config gate" && SKIP_PASS3=1; }
+```
+
+For each artifact type below, extract referenced names from the spec's `## External Dependencies` and `## Assumptions` sections (case-insensitive match on the artifact-type keyword, then capture the quoted name token). Query the target org for presence. Any miss is a **BLOCK** finding.
+
+| Artifact | Metadata type | Query approach |
+|---|---|---|
+| Connected App | `ConnectedApp` | `sf data query --use-tooling-api --target-org "$ALIAS" --query "SELECT Name FROM ConnectedApplication WHERE Name IN (<names>)"` |
+| Named Credential | `NamedCredential` | `sf org list metadata --target-org "$ALIAS" --metadata-type NamedCredential --json` then filter |
+| External Credential | `ExternalCredential` | `sf org list metadata --target-org "$ALIAS" --metadata-type ExternalCredential --json` |
+| Auth Provider | `AuthProvider` | `sf org list metadata --target-org "$ALIAS" --metadata-type AuthProvider --json` |
+| Certificate | `Certificate` | `sf org list metadata --target-org "$ALIAS" --metadata-type Certificate --json` |
+| Remote Site Setting | `RemoteSiteSetting` | `sf org list metadata --target-org "$ALIAS" --metadata-type RemoteSiteSetting --json` |
+
+For each missing artifact, emit a BLOCK finding of the form:
+```
+BLOCK: Connected App 'Acme_Stripe_Integration' is referenced by REQ-xxx as a pre-deploy assumption but does not exist in <alias>. Create it in Setup → App Manager before re-running /canary. The pipeline never creates this artifact programmatically — secrets, OAuth callbacks, and consumer keys must be wired through the UI.
+```
+
+If the spec's External Dependencies + Assumptions reference no org-config artifacts, this pass is a no-op (zero queries, zero output). Do not emit a "skipped" line.
+
+If any of the three pre-flight passes exits non-zero (BLOCK findings), **STOP** — surface the findings verbatim and refuse to call `sf project deploy validate`. Each finding is actionable. The user fixes the metadata (or creates the missing org-config artifact in Setup) and re-runs `/canary`. WARN-level findings (e.g., unknown-object heuristic, missing-custom-field on a layout) surface in the report but do not block — they're often false positives on cross-package deploys.
 
 ### Step 2b: Resolve `--test-level` from the diff (REQ-D)
 

@@ -42,6 +42,8 @@ If a `CLAUDE.md`, `README.md`, or `package.json` exists, extract this info autom
     architecture.md        # System diagram, layers, key patterns, ADRs
     conventions.md         # File organization, naming, testing, git conventions
     taxonomy.md            # Retrieval tag vocabulary (component/domain/stack/concerns)
+    sf-skills-catalog.md   # (SF projects only) Layer/glob → sf-skill dispatch table — required by /architect, task-implementer, Phase 5 reviewers
+    salesforce-rules.md    # (SF projects only) Always-on rules baseline (sharing, AccessLevel, no @future, etc.)
   specs/
     .gitkeep
   bugs/
@@ -234,6 +236,50 @@ fi
 ```
 
 Advise the user: "Open `.adlc/context/taxonomy.md` and customize the example values for this codebase. Authors of new REQs, bugs, and lessons will reference this file when choosing tag values (`component`, `domain`, `stack`, `concerns`). The `tags` dimension stays free-form."
+
+### Step 7.5: Scaffold Salesforce skills catalog & rules
+
+Copy the canonical Salesforce skill dispatch table (`sf-skills-catalog.md`) and the rules baseline (`salesforce-rules.md`) into the consumer repo's `.adlc/context/`. These are required by:
+- `/architect` Step 2.5 — to look up which orchestrator skills to load based on spec signals
+- `task-implementer` agent — to look up rubrics from the **File-glob → rubric dispatch** table
+- Phase 5 reviewer agents — same lookup, applied to the diff
+- `/proceed` Phase 5 Step E — to know what counts as Salesforce metadata for the platform validate gate
+
+Without these files in the consumer repo, the architect/implementer/reviewers fall back to first-principles reasoning, which is the failure mode that ships hand-rolled UI Bundle scaffolding instead of `sf template generate ui-bundle` output (and similar drift across every artifact family).
+
+**This step is idempotent — both files are *templates*, not customization surfaces.** Overwrite existing copies silently to keep them in sync with the toolkit; if the user has hand-edited either, surface a `/template-drift` advisory.
+
+```bash
+# Verify sources exist
+TOOLKIT_CTX="$HOME/.claude/skills/.adlc/context"
+if [ ! -f "$TOOLKIT_CTX/sf-skills-catalog.md" ] || [ ! -f "$TOOLKIT_CTX/salesforce-rules.md" ]; then
+  echo "ERROR: Salesforce context files not found at $TOOLKIT_CTX. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
+  exit 1
+fi
+
+mkdir -p .adlc/context
+
+# Catalog: overwrite — canonical, machine-consumed dispatch table
+cp "$TOOLKIT_CTX/sf-skills-catalog.md" .adlc/context/sf-skills-catalog.md
+echo "Synced .adlc/context/sf-skills-catalog.md from toolkit canonical."
+
+# Rules: overwrite if missing or unchanged from a prior toolkit version. Skip
+# overwrite if the file appears hand-customized (file size differs significantly
+# AND first line still matches the canonical header) — surface a /template-drift
+# advisory instead.
+if [ ! -f .adlc/context/salesforce-rules.md ]; then
+  cp "$TOOLKIT_CTX/salesforce-rules.md" .adlc/context/salesforce-rules.md
+  echo "Created .adlc/context/salesforce-rules.md from toolkit canonical."
+else
+  if ! cmp -s "$TOOLKIT_CTX/salesforce-rules.md" .adlc/context/salesforce-rules.md; then
+    echo "Preserved existing .adlc/context/salesforce-rules.md (differs from toolkit). Run /template-drift to review and sync."
+  else
+    echo "Preserved existing .adlc/context/salesforce-rules.md (already in sync)."
+  fi
+fi
+```
+
+Skip this step entirely for non-Salesforce projects (no `salesforce:` block in `.adlc/config.yml` and no `force-app/` directory). For Salesforce projects, this step is mandatory — the architect cannot reason about UI Bundles, OmniStudio, Data Cloud, or Agentforce scaffolding without the catalog.
 
 ### Step 8: Scaffold Claude Code Permissions Allowlist
 
