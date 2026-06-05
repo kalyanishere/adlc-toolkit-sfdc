@@ -41,7 +41,7 @@ Use Grep on `.adlc/knowledge/lessons/` with patterns matching the affected areas
 - No `System.debug` in production paths without log-level guard
 - Permission set naming `[AppPrefix]_[Component]_[AccessLevel]` (AppPrefix from `.adlc/config.yml`)
 - Named Credentials for callouts
-- ApexDoc on classes and public methods
+- ApexDoc on classes and public methods — ≤ 3 lines of prose, signature/purpose only (no embedded paragraphs of rationale; spec/architecture doc carries the depth)
 - API version ≥ project floor (≥ 66.0 if Agentforce in scope)
 
 #### sf-skill rubric coverage
@@ -69,7 +69,7 @@ Read `.adlc/context/conventions.md` and `salesforce-rules.md` Code Organization 
 - Apex naming: PascalCase classes, camelCase methods, ALL_CAPS_SNAKE_CASE enums
 - Permission set naming format
 - File names follow SFDX layout (`*.cls`, `*.cls-meta.xml`, `*.trigger`, `*.flow-meta.xml`, `lwc/<component>/`)
-- ApexDoc on classes/public methods (the *why*)
+- ApexDoc on classes/public methods — ≤ 3 lines, signature/purpose; deep rationale in the spec/architecture doc, not the header
 - Newspaper rule: methods ordered as referenced
 - Return-early pattern; no deep nesting
 

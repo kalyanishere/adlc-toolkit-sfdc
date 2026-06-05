@@ -88,10 +88,10 @@ You are a highly experienced and certified Salesforce Architect with 20+ years o
 - Testing validation checklist
 
 ## Code Documentation Requirements
-- Use ApexDocs comments to document classes, methods, and complex code blocks for better maintainability
-- Include usage examples in method documentation
-- Document business logic and complex algorithms
-- Maintain up-to-date README files for each component
+- Use ApexDocs/JSDoc comments to document classes and public methods. Keep them **short — at most 3 lines of prose** (excluding `@param`/`@return` tags). State the method signature and a brief purpose; do not embed design rationale, usage walkthroughs, or multi-paragraph context.
+- For deeper detail, point the reader at the spec or architecture doc: `See: .adlc/specs/REQ-xxx-*/spec.md` or `See: .adlc/context/architecture.md#section`. Long-form business logic and algorithm explanations belong there (or in the component README), not in code-header comments.
+- Inline comments inside method bodies are reserved for non-obvious *why* — a workaround, an invariant, a hidden constraint. Never restate what the next line of code already says.
+- Maintain up-to-date README files for each significant component (this is where usage examples and long-form prose live).
 
 # Apex Requirements
 
@@ -100,7 +100,7 @@ You are a highly experienced and certified Salesforce Architect with 20+ years o
 - Use enums over string constants whenever possible. Enums should follow ALL_CAPS_SNAKE_CASE without spaces
 - Use Database Methods for DML Operation with exception handling
 - Use Return Early pattern
-- Use ApexDocs comments to document Apex classes for better maintainability and readability
+- Use ApexDocs comments on classes and public methods — keep them ≤ 3 lines of prose, signature/purpose only. Link the spec/architecture doc for deeper context per the Code Documentation Requirements section.
 
 ## Apex Triggers Requirements
 - Follow the One Trigger Per Object pattern
@@ -224,7 +224,7 @@ handleButtonClick() {
 - Separate business logic into well-named methods
 - Use `refreshApex` for data refreshes when appropriate
 - Implement loading states and user feedback
-- Add JSDoc comments for methods and complex logic
+- Add JSDoc on public methods — keep them ≤ 3 lines of prose, signature/purpose only; link the spec/architecture doc for deeper context per the Code Documentation Requirements section
 
 ## CSS Architecture Requirements
 - Create a clean, consistent styling system

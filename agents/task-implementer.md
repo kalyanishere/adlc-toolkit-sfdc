@@ -52,7 +52,7 @@ These are the rules from `salesforce-rules.md` that the implementer enforces inl
 - **Apex naming**: PascalCase classes, camelCase methods/variables, ALL_CAPS_SNAKE_CASE enums.
 - **API version**: ≥ project floor (`.adlc/config.yml` `salesforce.api_version`); ≥ 66.0 when Agentforce is in scope.
 - **Permissions.md**: any task that introduces metadata MUST emit/update `Permissions.md` from `templates/permissions-template.md` with the assignment matrix and dependency mapping.
-- **ApexDoc**: classes and methods get ApexDoc comments explaining business intent (not the obvious "what").
+- **ApexDoc/JSDoc — keep it brief**: class- and method-level doc comments are **at most 3 lines** of prose (excluding the `/**` / `*/` markers and `@param`/`@return` tags). They state the method signature/purpose only — no design rationale, no usage walkthroughs, no paragraphs. For deeper context, point readers at the spec or architecture doc with a single `See: .adlc/specs/REQ-xxx-*/spec.md` (or `architecture.md#section`) reference. Inline comments inside methods are reserved for non-obvious *why* (a workaround, an invariant, a constraint) — never for restating *what* the next line does. If you feel the urge to write a paragraph, put it in the spec instead and link to it.
 
 ## Per-artifact rubric loading
 

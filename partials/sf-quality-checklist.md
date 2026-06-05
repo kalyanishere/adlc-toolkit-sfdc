@@ -117,9 +117,9 @@ Every feature touching metadata generates a `Permissions.md` (template at `templ
 - Newspaper rule: methods ordered as referenced (callers above callees). Alphabetize/arrange dependencies; separate instance vs static fields with blank lines.
 - Less code is better; the second-best line of code is easy to read.
 - Comments explain key design decisions; don't explain the obvious.
-- ApexDoc on classes, methods, and complex code blocks.
-- Up-to-date README files for each significant component.
-- Usage examples in method documentation when non-trivial.
+- ApexDoc on classes and public methods — **≤ 3 lines of prose**, signature/purpose only. Link the spec (`.adlc/specs/REQ-xxx-*/spec.md`) or architecture doc for deeper rationale rather than embedding it. No multi-paragraph headers, no walkthroughs, no usage tutorials inline.
+- Inline comments only for non-obvious *why* (workaround, invariant, hidden constraint) — never for what the next line literally does.
+- Up-to-date README files for each significant component (long-form prose lives here, not in code headers).
 
 ## Required patterns
 
@@ -154,7 +154,7 @@ Every feature touching metadata generates a `Permissions.md` (template at `templ
 - Event handlers prefixed `handle…` (`handleClick`, `handleChange`).
 - `if:true` / `if:false` for conditional rendering.
 - `for:each` with unique `key` attribute for lists.
-- JSDoc on public methods and complex logic.
+- JSDoc on public methods — **≤ 3 lines of prose**, signature/purpose only; link the spec/architecture doc for deeper context. No multi-paragraph descriptions.
 - No `console.log` — use platform logger.
 - Computed UI state via JavaScript getters (e.g., `get isButtonDisabled()`).
 - Async/await for server calls; `refreshApex` for data refresh.

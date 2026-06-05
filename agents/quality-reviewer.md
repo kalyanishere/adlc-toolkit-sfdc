@@ -41,7 +41,7 @@ The rubric you load defines the bar. The items below are the always-on baseline 
 - Constants/enums: ALL_CAPS_SNAKE_CASE
 - Sharing keyword present (`with sharing` / `without sharing`)
 - AccessLevel on every SOQL/DML
-- ApexDoc comments on classes and public methods (the *why*, not the *what*)
+- ApexDoc on classes and public methods — **≤ 3 lines of prose**, signature/purpose only. Flag any header comment that runs into multi-paragraph descriptions, usage walkthroughs, or design rationale that belongs in the spec/architecture doc. Reference should be a single `See: .adlc/specs/...` or `See: architecture.md#...` line, not embedded prose.
 - Newspaper rule: methods ordered as referenced (callers above callees)
 - Return-early pattern; no deep nesting
 - No System.debug without log-level control
@@ -54,7 +54,7 @@ The rubric you load defines the bar. The items below are the always-on baseline 
 - Lightning base components preferred over manual SLDS
 - Event handlers prefixed `handle…` (handleClick, handleChange)
 - `if:true` / `if:false` for conditional rendering; `for:each` with unique `key` attribute
-- JSDoc on public methods and complex logic
+- JSDoc on public methods — **≤ 3 lines of prose**, signature/purpose only. Flag multi-paragraph headers; rationale belongs in the spec or architecture doc with a single `See:` reference
 - No `console.log` — use `import { logger } from 'c/logger'` or platform equivalent
 
 ### Flow quality (when generating-flow rubric is loaded)
