@@ -93,10 +93,8 @@
       "Bash(awk:*)",
       "Bash(head:*)",
       "Bash(tail:*)",
-      "Bash(wc:*)"
-    ],
-    "ask": [
-      "Bash(git push --force)",
+      "Bash(wc:*)",
+        "Bash(git push --force)",
       "Bash(git push -f)",
       "Bash(git push --force main:*)",
       "Bash(git push --force origin main:*)",
@@ -124,6 +122,9 @@
       "Bash(vlocity packDeploy:*)",
       "Bash(vlocity packRetry:*)",
       "Bash(./deploy.sh:*)"
+    ],
+    "ask": [
+    
     ]
   }
 }
