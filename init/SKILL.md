@@ -139,6 +139,15 @@ Add the following entries to the project's `.gitignore` (create it if it doesn't
 .adlc/.next-bug.lock.d/
 .adlc/.next-lesson.lock.d/
 .adlc/.cache/
+
+# Playwright session tokens & test artifacts. storageState.json holds a live
+# Salesforce session cookie — checking it in is a credential leak (test-auditor
+# flags as Critical). reports/playwright/ holds traces/videos/HTML reports
+# regenerated on every run.
+tests/e2e/storageState.json
+reports/playwright/
+playwright-report/
+test-results/
 ```
 
 ### Step 6: Copy ETHOS.md and Templates Into the Project
@@ -372,8 +381,97 @@ Advise the user:
 - "If this is a single-repo project (REQs only ever originate here and never touch other repos), leave `repos:` with the single primary entry. ADLC skills fall back to single-repo behavior when no siblings are declared."
 - "After editing, verify with `cat .adlc/config.yml` and make sure each sibling path resolves: `git -C <sibling-path> rev-parse --git-dir`."
 
-### Step 10: Summary
+### Step 10: Scaffold Playwright UI harness (LWC / FlexiPage / OmniStudio / UI-Bundle projects)
+
+`/architect` Step 8 ("UI test obligation") requires every UI-bearing task to ship a paired Playwright spec when `.adlc/config.yml` declares `playwright_specs:`. The default `config-template.yml` and both presets (`sfdc-core.yml`, `sfdc-industries.yml`) seed `playwright_specs: "tests/e2e"`, so by default a new project will start asking for Playwright specs the first time `/architect` runs on a UI REQ.
+
+Without a runner wired up, the implementer drops the spec into a project that has no `playwright.config.ts` and `agents/test-auditor.md` flags missing wiring as Major. This step scaffolds the runner so the *first* spec lands in a working harness.
+
+**Skip this step entirely** when:
+- `.adlc/config.yml` does not declare `playwright_specs:` (the user opted out), OR
+- `stack.frontends` does not include `lwc` AND no `force-app/**/lwc/**` directory exists AND `industries:` does not include `omnistudio` or `agentforce` (no UI surface in scope).
+
+**This step is idempotent** — every file copy is gated on `[ ! -f <dest> ]` so a re-run preserves customizations. If the user has hand-edited any harness file, surface a `/template-drift` advisory rather than overwriting.
+
+```bash
+# Verify sources exist
+TOOLKIT_PW="$HOME/.claude/skills/templates/playwright"
+if [ ! -d "$TOOLKIT_PW" ]; then
+  echo "ERROR: Playwright harness template not found at $TOOLKIT_PW. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
+  exit 1
+fi
+
+# Decide whether to scaffold. Read playwright_specs from .adlc/config.yml; bail when unset/empty.
+pw_specs=$(awk '/^playwright_specs:/ { sub(/^playwright_specs:[[:space:]]*/, ""); gsub(/["'\'']/, ""); sub(/[[:space:]]*#.*$/, ""); print; exit }' .adlc/config.yml 2>/dev/null)
+if [ -z "$pw_specs" ]; then
+  echo "Skipped Playwright harness scaffold — playwright_specs is not declared in .adlc/config.yml."
+else
+  # 1. playwright.config.ts at repo root — only if absent (preserve customizations).
+  if [ ! -f playwright.config.ts ]; then
+    cp "$TOOLKIT_PW/playwright.config.ts" playwright.config.ts
+    echo "Created playwright.config.ts from canonical template."
+  else
+    echo "Preserved existing playwright.config.ts."
+  fi
+
+  # 2. tests/e2e/global-setup.ts — only if absent.
+  mkdir -p "$pw_specs"
+  if [ ! -f "$pw_specs/global-setup.ts" ]; then
+    cp "$TOOLKIT_PW/tests/e2e/global-setup.ts" "$pw_specs/global-setup.ts"
+    echo "Created $pw_specs/global-setup.ts from canonical template."
+  else
+    echo "Preserved existing $pw_specs/global-setup.ts."
+  fi
+
+  # 3. example.spec.ts.example — implementer copies this when authoring the
+  # first spec. Always present, no-op if already there.
+  if [ ! -f "$pw_specs/example.spec.ts.example" ]; then
+    cp "$TOOLKIT_PW/tests/e2e/example.spec.ts.example" "$pw_specs/example.spec.ts.example"
+    echo "Created $pw_specs/example.spec.ts.example."
+  fi
+
+  # 4. tests/e2e/.gitignore — defense in depth on top of root .gitignore.
+  if [ ! -f "$pw_specs/.gitignore" ]; then
+    cp "$TOOLKIT_PW/tests/e2e/.gitignore" "$pw_specs/.gitignore"
+  fi
+
+  # 5. README.md inside the harness dir — orientation for the next dev.
+  if [ ! -f "$pw_specs/README.md" ]; then
+    cp "$TOOLKIT_PW/README.md" "$pw_specs/README.md"
+  fi
+
+  # 6. Advise on package.json wiring. We do NOT auto-edit package.json — many
+  # projects use pnpm/yarn with custom test orchestration. test-auditor flags
+  # the missing test:e2e script as Minor (a wiring nit, not a hard fail), so a
+  # printed advisory is sufficient.
+  if [ -f package.json ] && ! grep -q '"test:e2e"' package.json; then
+    cat <<'EOF'
+
+Playwright harness scaffolded. To finish wiring:
+
+  1. Install Playwright (one-time):
+       npm install --save-dev @playwright/test
+       npx playwright install --with-deps chromium
+
+  2. Add the test:e2e script to package.json `scripts`:
+       "test:e2e": "playwright test"
+
+  3. (Optional) Add a CI job that runs:
+       npm run test:e2e -- --project=sandbox
+
+The harness reads the target org from .adlc/config.yml `orgs.<project-name>`
+and auths via `sf org display`. NEVER inline credentials in any spec —
+test-auditor flags hardcoded passwords/tokens as Critical.
+EOF
+  fi
+fi
+```
+
+After this step, the next `/architect` run on a UI-bearing REQ will land its required `tests/e2e/<feature>.spec.ts` in a project that already has a working runner.
+
+### Step 11: Summary
 1. Display the created directory structure
 2. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically)
 3. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo
-4. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists
+4. If the Playwright harness was scaffolded, remind the user to run `npm install --save-dev @playwright/test` and add the `test:e2e` script before the first `/proceed` on a UI REQ
+5. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists

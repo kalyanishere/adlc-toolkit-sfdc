@@ -49,3 +49,11 @@ orgs:
   sandbox: "<sandbox-alias>"
   staging: "<staging-alias>"
   prod:    "<prod-alias>"
+
+# Directory holding Playwright UI specs. /architect Step 8 requires every
+# UI-bearing task (LWC, FlexiPage, Lightning App, Experience Cloud, Flow
+# screen, custom tab) to ship a paired `tests/e2e/<feature>.spec.ts` when
+# this key is declared. /canary Step 4b runs the specs as a sandbox/staging
+# smoke gate. Pairs with `playwright.config.ts` + `tests/e2e/global-setup.ts`
+# at repo root.
+playwright_specs: "tests/e2e"

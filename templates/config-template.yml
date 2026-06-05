@@ -184,3 +184,29 @@ orgs:
   prod:    "<prod-alias>"
 
 agentforce_test_specs: ""           # e.g., "force-app/main/default/agentTests"
+
+# ---------------------------------------------------------------------------
+# playwright_specs: Directory holding Playwright UI specs (E2E browser tests).
+# ---------------------------------------------------------------------------
+# Required for any project that ships LWCs, FlexiPages, Lightning Apps,
+# Experience Cloud sites, OmniScripts, Flow screens, custom tabs, or
+# Agentforce conversation UI. /architect Step 8 ("UI test obligation") reads
+# this key — when it's declared, every UI-bearing task gets a paired
+# `tests/e2e/<feature>.spec.ts` in *Files to Create/Modify* and an acceptance
+# criterion to run it; when it's missing, the architect downgrades to a
+# Technical-Notes warning and the implementer skips Playwright entirely.
+# /canary Step 4b runs `npx playwright test` as a real-browser smoke gate
+# against sandbox/staging when this is set; agents/test-auditor.md uses it
+# to detect E2E coverage gaps.
+#
+# Default `tests/e2e` matches the path baked into architect/SKILL.md and
+# test-auditor.md. Override only if your repo standardizes on a different
+# location. Set to "" or remove the key to opt out (LWC Jest stays required;
+# Playwright becomes informational).
+#
+# Pairs with a `playwright.config.ts` at repo root and a
+# `tests/e2e/global-setup.ts` that persists `storageState.json` from
+# `sf org display`. Without those, test-auditor flags the missing wiring
+# as Major.
+
+playwright_specs: "tests/e2e"

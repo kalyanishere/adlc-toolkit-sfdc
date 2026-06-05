@@ -149,7 +149,8 @@ Check:
 - SLDS 2 / dark mode compliance
 - event contracts
 - performance / rerender safety
-- Jest coverage when required
+- Jest coverage when required (component in isolation)
+- Playwright e2e spec when `.adlc/config.yml` declares `playwright_specs:` (cross-component flow: login → navigate → interact → assert). Copy [assets/playwright-spec/componentName.spec.ts.example](assets/playwright-spec/componentName.spec.ts.example) to `<playwright_specs>/<feature>.spec.ts`. Architect Step 8 makes this mandatory for any task touching `force-app/**/lwc/**` when wiring is in scope; `agents/test-auditor.md` audits the result.
 
 ### 5. Hand off supporting backend or deploy work
 Use:
@@ -241,6 +242,7 @@ Local Dev commands install just-in-time on first run. They are long-running proc
 - [assets/form-component/formComponent.js](assets/form-component/formComponent.js) — form validation and DML patterns
 - [assets/graphql-component/graphqlComponent.js](assets/graphql-component/graphqlComponent.js) — GraphQL wire adapter with cursor-based pagination
 - [assets/jest-test/componentName.test.js.example](assets/jest-test/componentName.test.js.example) — Jest test template (copy and rename, remove `.example` suffix)
+- [assets/playwright-spec/componentName.spec.ts.example](assets/playwright-spec/componentName.spec.ts.example) — Playwright e2e spec template for an LWC surface (copy to `<playwright_specs>/<feature>.spec.ts`, drop `.example`). Uses `getByRole` / `getByLabel` / `getByTestId` and avoids the brittle locators flagged by `agents/test-auditor.md`. Required when `.adlc/config.yml` declares `playwright_specs:` and the task touches `force-app/**/lwc/**`.
 - [assets/message-channel/lmsPublisher.js](assets/message-channel/lmsPublisher.js) — LMS publisher pattern
 - [assets/message-channel/lmsSubscriber.js](assets/message-channel/lmsSubscriber.js) — LMS subscriber pattern
 - [assets/modal-component/modalComponent.js](assets/modal-component/modalComponent.js) — modal with focus trap and ESC handling
