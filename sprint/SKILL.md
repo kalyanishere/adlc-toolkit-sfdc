@@ -169,9 +169,24 @@ Launch all agents in a single message to maximize parallelism. Each pipeline-run
 
 Background `pipeline-runner` agents send an automatic notification when they finish (complete, blocked, or failed). The orchestrator does **not** actively poll on a timer — attempting to `sleep`/loop mid-turn would block the conversation without any benefit. Instead, the orchestrator reacts to agent-completion notifications and refreshes state whenever the user takes a turn.
 
-1. **Immediately after launch**: read every `pipeline-state.json` that was just initialized and print the initial sprint dashboard (see below). This confirms all agents launched and shows their starting phase.
+**Read state files in slim mode, not full.** `pipeline-state.json` grows monotonically through a run (every phase appends to `completedPhases`, `phaseHistory`, `notes`, `phase4.completedTasks`, `phase4.failedTasks`, `blockers`); on a 5-REQ sprint the cumulative bookkeeping is the single largest pressure on the orchestrator's context window. The dashboard, blocker handling, and verify gate need only a small projection, so **always extract the projection via `jq` and never `Read` the file in full** unless step 4.6 explicitly needs full blocker detail. The slim projection is:
 
-2. **When an agent-completion notification arrives** (the platform delivers one per background agent): re-read every `pipeline-state.json` under `.adlc/specs/REQ-*/` and update the dashboard. Only redraw when state has actually changed — don't spam the user with identical dashboards.
+```sh
+jq -c '{
+  currentPhase, completed,
+  blockers: (.blockers // []),
+  currentTask: (.phase4.currentTask // null),
+  failedTasks: (.phase4.failedTasks // []),
+  lastPhase: (.phaseHistory // [] | last),
+  repos: (.repos // {} | with_entries(.value |= {touched, merged, prUrl}))
+}' <pipeline-state.json>
+```
+
+This returns the exact fields the dashboard, blocker check, and merge-verify gate consume — typically a few hundred tokens per file vs. multi-KB. **Read the full file only when** (a) step 4.6 needs the long-form blocker text or `notes`, or (b) Step 5 needs `mergeOrder` / per-repo paths for cross-repo sequencing — and even then, target the specific keys with `jq` rather than slurping the whole document into context. If `jq` is unavailable in a given environment, fall back to a `python3 -c "import json,sys; d=json.load(open(sys.argv[1])); ..."` one-liner that emits the same projection — never to a full Read.
+
+1. **Immediately after launch**: project every `pipeline-state.json` that was just initialized via the slim `jq` block above and print the initial sprint dashboard (see below). This confirms all agents launched and shows their starting phase.
+
+2. **When an agent-completion notification arrives** (the platform delivers one per background agent): re-project every `pipeline-state.json` under `.adlc/specs/REQ-*/` via the same slim `jq` block and update the dashboard. Only redraw when state has actually changed — don't spam the user with identical dashboards.
 
    **Verify the agent's terminal-state claim before accepting it.** A pipeline-runner's final report MUST lead with one of `{merged, pr-ready, blocked, failed}` (see `~/.claude/agents/pipeline-runner.md` Terminal state contract). The orchestrator MUST NOT trust the claim at face value:
    - For `merged` and `pr-ready` claims: run `gh pr view <prUrl> --json state,mergedAt` against every touched-repo PR before updating the dashboard.
@@ -181,7 +196,7 @@ Background `pipeline-runner` agents send an automatic notification when they fin
    - For `blocked` and `failed`: read `pipeline-state.json.blockers` / `notes` and surface to the user per the existing blocker-handling flow (Step 4.6).
    - **Untagged claims** (e.g., a vague "Pipeline complete" without one of the four tags) are protocol violations. Treat as `blocked` and surface to the user — do not assume the agent finished cleanly.
 
-3. **When the user takes a turn during the sprint** (asks a question, issues a command): re-read all `pipeline-state.json` files first, so any answer reflects current pipeline state rather than a stale snapshot from launch.
+3. **When the user takes a turn during the sprint** (asks a question, issues a command): re-project all `pipeline-state.json` files first via the slim `jq` block above, so any answer reflects current pipeline state rather than a stale snapshot from launch. Do not Read the files in full.
 
 4. **Dashboard format**:
 
