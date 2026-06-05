@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ADLC Sprint Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d222c;
+    --border: #262c38;
+    --fg: #e6e9ef;
+    --muted: #8b94a7;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --info: #60a5fa;
+    --done: #34d399;
+    --running: #60a5fa;
+    --blocked: #fbbf24;
+    --failed: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px; background: var(--panel);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .conn { margin-left: auto; font-size: 11px; color: var(--muted); }
+  header .conn.live::before {
+    content: ""; display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--ok); margin-right: 6px;
+    box-shadow: 0 0 6px var(--ok);
+  }
+  header .conn.dead::before {
+    content: ""; display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--bad); margin-right: 6px;
+  }
+  main { padding: 18px; display: grid; gap: 14px; }
+  .empty {
+    color: var(--muted); padding: 40px; text-align: center; border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+  .req {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden;
+  }
+  .req-head {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .req-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600;
+    background: var(--panel-2); padding: 2px 8px; border-radius: 4px; font-size: 12px;
+  }
+  .req-title { color: var(--fg); }
+  .req-title.muted { color: var(--muted); }
+  .pill {
+    margin-left: auto; padding: 2px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+  }
+  .pill.running { background: rgba(96,165,250,0.15); color: var(--running); }
+  .pill.blocked { background: rgba(251,191,36,0.18); color: var(--blocked); }
+  .pill.failed  { background: rgba(248,113,113,0.18); color: var(--failed); }
+  .pill.merged  { background: rgba(52,211,153,0.18); color: var(--done); }
+  .pill.idle    { background: rgba(139,148,167,0.18); color: var(--muted); }
+  .req-body { padding: 12px 14px; display: grid; gap: 10px; }
+  .phase-strip { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
+  .phase {
+    padding: 5px 6px; font-size: 10px; border-radius: 4px;
+    background: var(--panel-2); color: var(--muted); text-align: center;
+    border: 1px solid transparent;
+  }
+  .phase.done    { background: rgba(52,211,153,0.18); color: var(--done); }
+  .phase.current {
+    background: rgba(96,165,250,0.20); color: var(--running);
+    border-color: rgba(96,165,250,0.45);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(96,165,250,0.30); }
+    50%      { box-shadow: 0 0 0 4px rgba(96,165,250,0.00); }
+  }
+  .meta-row {
+    display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 11px;
+  }
+  .meta-row b { color: var(--fg); font-weight: 500; }
+  .blockers {
+    background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.30);
+    border-radius: 6px; padding: 9px 11px; color: #fde68a;
+  }
+  .blockers .title { font-weight: 600; margin-bottom: 4px; color: var(--warn); }
+  .blockers ul { margin: 4px 0 0 0; padding-left: 18px; }
+  .blockers li { margin: 2px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  .tasks { display: flex; flex-wrap: wrap; gap: 4px; }
+  .task {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
+    padding: 2px 6px; border-radius: 3px; background: var(--panel-2);
+    color: var(--muted); border: 1px solid transparent;
+  }
+  .task.complete { background: rgba(52,211,153,0.18); color: var(--done); }
+  .task.in_progress {
+    background: rgba(96,165,250,0.18); color: var(--running);
+    border-color: rgba(96,165,250,0.40);
+  }
+  .task.failed { background: rgba(248,113,113,0.18); color: var(--failed); }
+  .repos { display: flex; gap: 6px; flex-wrap: wrap; }
+  .repo {
+    font-size: 11px; padding: 2px 6px; border-radius: 3px;
+    background: var(--panel-2); color: var(--muted);
+  }
+  .repo.merged { background: rgba(52,211,153,0.18); color: var(--done); }
+  .repo a { color: inherit; text-decoration: underline; text-decoration-color: rgba(255,255,255,0.20); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ADLC Sprint Dashboard</h1>
+  <span class="meta" id="root-path">…</span>
+  <span class="conn dead" id="conn">connecting</span>
+</header>
+<main id="main">
+  <div class="empty">Waiting for state…</div>
+</main>
+<script>
+  const main = document.getElementById('main');
+  const conn = document.getElementById('conn');
+  const rootPathEl = document.getElementById('root-path');
+
+  const PHASE_DEFAULT = ['0 Worktree','1 Spec','2 Architect','3 Validate','4 Implement','5 Verify','6 PR','7 CI','8 Merge'];
+
+  function fmtDuration(iso) {
+    if (!iso) return '';
+    const start = new Date(iso).getTime();
+    if (Number.isNaN(start)) return '';
+    const ms = Date.now() - start;
+    const m = Math.floor(ms / 60000);
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    return h + 'h ' + (m % 60) + 'm';
+  }
+
+  function statePill(req) {
+    if (req.completed) return { cls: 'merged', label: 'merged' };
+    if (req.blockers && req.blockers.length) return { cls: 'blocked', label: 'blocked' };
+    if (req.failedTasks && req.failedTasks.length) return { cls: 'failed', label: 'failed' };
+    if (!req.hasState) return { cls: 'idle', label: 'spec only' };
+    return { cls: 'running', label: 'running' };
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[c]);
+  }
+
+  function renderPhases(req, labels) {
+    const cells = labels.map((label, i) => {
+      let cls = '';
+      if (req.completedPhases && req.completedPhases.includes(i)) cls = 'done';
+      else if (req.currentPhase === i && !req.completed) cls = 'current';
+      if (req.completed) cls = 'done';
+      return `<div class="phase ${cls}" title="Phase ${escapeHtml(label)}">${escapeHtml(label)}</div>`;
+    }).join('');
+    return `<div class="phase-strip">${cells}</div>`;
+  }
+
+  function renderTasks(req) {
+    if (!req.tasks || !req.tasks.length) return '';
+    const completed = new Set(req.completedTasks || []);
+    const failed = new Set(req.failedTasks || []);
+    const chips = req.tasks.map((t) => {
+      let status = (t.status || '').toLowerCase().replace(/\s+/g, '_');
+      if (completed.has(t.id)) status = 'complete';
+      if (failed.has(t.id)) status = 'failed';
+      if (req.currentTask === t.id) status = 'in_progress';
+      const titleAttr = `${t.id}${t.title ? ' — ' + t.title : ''} (${t.status || 'unknown'})`;
+      return `<span class="task ${escapeHtml(status)}" title="${escapeHtml(titleAttr)}">${escapeHtml(t.id)}</span>`;
+    }).join('');
+    return `<div class="tasks">${chips}</div>`;
+  }
+
+  function renderRepos(req) {
+    const entries = Object.entries(req.repos || {});
+    if (!entries.length) return '';
+    const chips = entries.map(([id, r]) => {
+      const cls = r.merged ? 'merged' : '';
+      const inner = r.prUrl
+        ? `<a href="${escapeHtml(r.prUrl)}" target="_blank" rel="noopener">${escapeHtml(id)}</a>`
+        : escapeHtml(id);
+      const flag = r.primary ? ' (primary)' : '';
+      return `<span class="repo ${cls}" title="${escapeHtml(id)}${flag}${r.merged ? ' • merged' : ''}">${inner}${flag}</span>`;
+    }).join('');
+    return `<div class="repos">${chips}</div>`;
+  }
+
+  function renderBlockers(req) {
+    if (!req.blockers || !req.blockers.length) return '';
+    const items = req.blockers.map((b) => {
+      const txt = typeof b === 'string' ? b : (b.message || JSON.stringify(b));
+      return `<li>${escapeHtml(txt)}</li>`;
+    }).join('');
+    return `<div class="blockers"><div class="title">Blocker</div><ul>${items}</ul></div>`;
+  }
+
+  function renderReq(req, labels) {
+    const pill = statePill(req);
+    const phaseLine = req.hasState
+      ? `Phase <b>${escapeHtml(req.currentPhase ?? '?')}</b> / 8`
+      : `<span style="color:var(--muted)">Spec only — pipeline not started</span>`;
+    const dur = req.startedAt ? `<span>Duration <b>${fmtDuration(req.startedAt)}</b></span>` : '';
+    const last = req.lastPhase ? `<span>Last <b>${escapeHtml(typeof req.lastPhase === 'string' ? req.lastPhase : (req.lastPhase.phase ?? JSON.stringify(req.lastPhase)))}</b></span>` : '';
+    const branch = req.integrationBranch ? `<span>Base <b>${escapeHtml(req.integrationBranch)}</b></span>` : '';
+    const taskLine = req.currentTask ? `<span>Task <b>${escapeHtml(req.currentTask)}</b></span>` : '';
+    return `
+      <section class="req">
+        <div class="req-head">
+          <span class="req-id">${escapeHtml(req.reqId)}</span>
+          <span class="req-title ${req.title ? '' : 'muted'}">${escapeHtml(req.title || '(no title)')}</span>
+          <span class="pill ${pill.cls}">${pill.label}</span>
+        </div>
+        <div class="req-body">
+          ${renderPhases(req, labels)}
+          <div class="meta-row">${phaseLine}${taskLine ? '' : ''}${dur}${last}${branch}${taskLine}</div>
+          ${renderRepos(req)}
+          ${renderTasks(req)}
+          ${renderBlockers(req)}
+        </div>
+      </section>
+    `;
+  }
+
+  function render(snap) {
+    rootPathEl.textContent = snap.root;
+    const labels = snap.phaseLabels || PHASE_DEFAULT;
+    if (!snap.reqs || !snap.reqs.length) {
+      main.innerHTML = `<div class="empty">No REQs found under <code>.adlc/specs/</code>.</div>`;
+      return;
+    }
+    main.innerHTML = snap.reqs.map((r) => renderReq(r, labels)).join('');
+  }
+
+  function setConn(state, label) {
+    conn.className = 'conn ' + state;
+    conn.textContent = label;
+  }
+
+  function start() {
+    setConn('dead', 'connecting');
+    const es = new EventSource('/events');
+    es.addEventListener('state', (e) => {
+      try {
+        const snap = JSON.parse(e.data);
+        render(snap);
+        setConn('live', 'live');
+      } catch (_) { /* ignore */ }
+    });
+    es.onerror = () => {
+      setConn('dead', 'reconnecting…');
+      es.close();
+      setTimeout(start, 2000);
+    };
+  }
+
+  // Re-render every 30s so duration counters keep ticking even between SSE pushes.
+  setInterval(() => {
+    if (window.__lastSnap) render(window.__lastSnap);
+  }, 30000);
+
+  fetch('/api/state').then((r) => r.json()).then((snap) => {
+    window.__lastSnap = snap;
+    render(snap);
+  }).catch(() => {});
+
+  start();
+</script>
+</body>
+</html>

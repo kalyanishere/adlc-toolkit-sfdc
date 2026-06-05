@@ -11,3 +11,6 @@
 
 # ADLC pipeline state (ephemeral, per-worktree)
 .adlc/specs/*/pipeline-state.json
+
+# ADLC runtime (sprint-dashboard pid/port/url/log files)
+.adlc/runtime/
