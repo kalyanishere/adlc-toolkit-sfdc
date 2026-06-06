@@ -74,14 +74,50 @@ function readRegistry() {
   return roots;
 }
 
+const REQ_DIR_RE = /^(?:[A-Z]+-)?REQ-\d+/;
+
 function listSpecDirs(root) {
   const specsRoot = path.join(root, '.adlc', 'specs');
   if (!fs.existsSync(specsRoot)) return [];
   let entries;
   try { entries = fs.readdirSync(specsRoot); } catch (_) { return []; }
   return entries
-    .filter((name) => /^(?:[A-Z]+-)?REQ-\d+/.test(name))
+    .filter((name) => REQ_DIR_RE.test(name))
     .map((name) => path.join(specsRoot, name));
+}
+
+// Walk every worktree under <root>/.worktrees/* and collect any REQ spec
+// directories living there. /proceed Step 0 writes pipeline-state.json
+// into the *worktree's* .adlc/specs/REQ-xxx/ before the work merges back
+// to main, so without scanning worktrees the dashboard can't see in-flight
+// REQs. Their state files are the live ones — once Phase 8 merges the PR,
+// the worktree is removed and the merged copy in <root>/.adlc/specs/ takes
+// over. Tolerant of missing/empty .worktrees and unreadable subdirs.
+function listWorktreeSpecDirs(root) {
+  const worktreesRoot = path.join(root, '.worktrees');
+  if (!fs.existsSync(worktreesRoot)) return [];
+  let worktrees;
+  try { worktrees = fs.readdirSync(worktreesRoot); } catch (_) { return []; }
+  const out = [];
+  for (const wt of worktrees) {
+    const wtPath = path.join(worktreesRoot, wt);
+    let stat;
+    try { stat = fs.statSync(wtPath); } catch (_) { continue; }
+    if (!stat.isDirectory()) continue;
+    const specsRoot = path.join(wtPath, '.adlc', 'specs');
+    if (!fs.existsSync(specsRoot)) continue;
+    let entries;
+    try { entries = fs.readdirSync(specsRoot); } catch (_) { continue; }
+    for (const name of entries) {
+      if (REQ_DIR_RE.test(name)) out.push(path.join(specsRoot, name));
+    }
+  }
+  return out;
+}
+
+function reqIdFromSpecDir(specDir) {
+  const m = path.basename(specDir).match(/^((?:[A-Z]+-)?REQ-\d+)/);
+  return m ? m[1] : path.basename(specDir);
 }
 
 function readReqTitle(specDir) {
@@ -224,8 +260,33 @@ function projectReqState(specDir) {
 }
 
 function snapshotProject(root) {
-  const dirs = listSpecDirs(root.path);
-  const reqs = dirs.map(projectReqState).filter(Boolean);
+  // Collect spec dirs from both the main checkout (post-merge state files)
+  // and every active worktree (in-flight state files written by /proceed
+  // Step 0). Dedupe by REQ id, preferring the candidate that has a
+  // pipeline-state.json — that's the live one. If neither has state, the
+  // merged-checkout copy wins (it's the canonical resting place once a
+  // pipeline finishes and worktrees are removed).
+  const candidates = [
+    ...listSpecDirs(root.path),
+    ...listWorktreeSpecDirs(root.path),
+  ];
+  const byReq = new Map();
+  for (const dir of candidates) {
+    const id = reqIdFromSpecDir(dir);
+    const hasState = fs.existsSync(path.join(dir, 'pipeline-state.json'));
+    const existing = byReq.get(id);
+    if (!existing) {
+      byReq.set(id, { dir, hasState });
+      continue;
+    }
+    // Prefer whichever candidate carries a state file. If both do (shouldn't
+    // normally happen — would mean a merged spec with the worktree still
+    // around), prefer the worktree (in-flight wins; the candidate list
+    // appends worktrees after main, so the latter overwrites).
+    if (hasState && !existing.hasState) byReq.set(id, { dir, hasState });
+    else if (hasState && existing.hasState) byReq.set(id, { dir, hasState });
+  }
+  const reqs = [...byReq.values()].map((c) => projectReqState(c.dir)).filter(Boolean);
   reqs.sort((a, b) => a.reqId.localeCompare(b.reqId));
   return {
     name: root.name,
