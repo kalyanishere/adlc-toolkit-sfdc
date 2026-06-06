@@ -21,8 +21,30 @@ REGISTRY_FILE="$HOME/.adlc/dashboard-registry.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVER_JS="$SCRIPT_DIR/server.js"
 PORT="${ADLC_DASHBOARD_PORT:-5174}"
+OPEN_BROWSER="${ADLC_DASHBOARD_OPEN:-0}"
 
 mkdir -p "$HOME_RUNTIME" "$HOME/.adlc"
+
+# Open the dashboard URL in the user's default browser (Chrome preferred on macOS).
+# Best-effort, silent on failure — never fails the parent skill.
+open_in_browser() {
+  url="$1"
+  [ -z "$url" ] && return 0
+  case "$(uname -s)" in
+    Darwin)
+      # Try Chrome first; fall back to system default.
+      open -a "Google Chrome" "$url" 2>/dev/null || open "$url" 2>/dev/null || true
+      ;;
+    Linux)
+      if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$url" >/dev/null 2>&1 || true
+      fi
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      cmd.exe /c start "" "$url" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
 
 # Upsert this repo into the dashboard registry. Done before any early-exit
 # so an already-running server still picks up new projects.
@@ -57,7 +79,9 @@ if [ -f "$PID_FILE" ]; then
   EXISTING_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [ -n "$EXISTING_PID" ] && kill -0 "$EXISTING_PID" 2>/dev/null; then
     if [ -f "$URL_FILE" ]; then
-      echo "[sprint-dashboard] already running: $(cat "$URL_FILE")"
+      RUNNING_URL="$(cat "$URL_FILE")"
+      echo "[sprint-dashboard] already running: $RUNNING_URL"
+      [ "$OPEN_BROWSER" = "1" ] && open_in_browser "$RUNNING_URL"
     else
       echo "[sprint-dashboard] already running (pid $EXISTING_PID)"
     fi
@@ -86,7 +110,9 @@ disown "$LAUNCHED_PID" 2>/dev/null || true
 i=0
 while [ $i -lt 30 ]; do
   if [ -f "$URL_FILE" ]; then
-    echo "[sprint-dashboard] launched: $(cat "$URL_FILE")"
+    LAUNCHED_URL="$(cat "$URL_FILE")"
+    echo "[sprint-dashboard] launched: $LAUNCHED_URL"
+    [ "$OPEN_BROWSER" = "1" ] && open_in_browser "$LAUNCHED_URL"
     exit 0
   fi
   sleep 0.1

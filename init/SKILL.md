@@ -469,6 +469,31 @@ fi
 
 After this step, the next `/architect` run on a UI-bearing REQ will land its required `tests/e2e/<feature>.spec.ts` in a project that already has a working runner.
 
+### Step 10.5: Register the project with the sprint dashboard & open it in Chrome
+
+Tell the shared dashboard (running on this host, shared across every project) about this project so its REQs show up alongside everything else. Then launch / surface the dashboard URL in the user's default browser (Chrome preferred on macOS) so they can immediately see this project listed.
+
+The launcher script is idempotent: it upserts the current `ADLC_ROOT` into `~/.adlc/dashboard-registry.json`, no-ops if the dashboard is already running, and never fails the parent skill on error. Setting `ADLC_DASHBOARD_OPEN=1` tells it to open the dashboard URL in the browser after registration.
+
+```bash
+# Resolve the launcher. Prefer the locally-copied .adlc/ path so this works
+# inside git worktrees; fall back to the canonical toolkit location.
+LAUNCHER=""
+if [ -x .adlc/tools/sprint-dashboard/launch.sh ]; then
+  LAUNCHER=".adlc/tools/sprint-dashboard/launch.sh"
+elif [ -x "$HOME/.claude/skills/tools/sprint-dashboard/launch.sh" ]; then
+  LAUNCHER="$HOME/.claude/skills/tools/sprint-dashboard/launch.sh"
+fi
+
+if [ -n "$LAUNCHER" ]; then
+  ADLC_ROOT="$(pwd)" ADLC_DASHBOARD_OPEN=1 sh "$LAUNCHER" || true
+else
+  echo "[init] sprint-dashboard launcher not found — skipping dashboard registration."
+fi
+```
+
+After this step, the user should see `<project-name>` listed at `http://127.0.0.1:5174` (default port; override with `ADLC_DASHBOARD_PORT`). The server picks up the new entry from the registry on its next ~1.5s poll, so even when the launcher reports "already running", the project shows up within seconds.
+
 ### Step 11: Summary
 1. Display the created directory structure
 2. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically)

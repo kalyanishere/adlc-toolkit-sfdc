@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // ADLC sprint dashboard — zero-dep multi-project SSE server.
 // Reads ~/.adlc/dashboard-registry.json on every poll and aggregates
-// .adlc/specs/REQ-*/ across every registered project root.
+// .adlc/specs/{,<PFX>-}REQ-*/ across every registered project root.
+// (Optional [A-Z]+- prefix lets shortname-namespaced ids like SAT-REQ-010 match.)
 'use strict';
 
 const http = require('http');
@@ -79,7 +80,7 @@ function listSpecDirs(root) {
   let entries;
   try { entries = fs.readdirSync(specsRoot); } catch (_) { return []; }
   return entries
-    .filter((name) => /^REQ-/.test(name))
+    .filter((name) => /^(?:[A-Z]+-)?REQ-\d+/.test(name))
     .map((name) => path.join(specsRoot, name));
 }
 
@@ -121,7 +122,7 @@ function readTaskStrip(specDir) {
 }
 
 function projectReqState(specDir) {
-  const id = path.basename(specDir).match(/^(REQ-\d+)/);
+  const id = path.basename(specDir).match(/^((?:[A-Z]+-)?REQ-\d+)/);
   const reqId = id ? id[1] : path.basename(specDir);
   const stateFile = path.join(specDir, 'pipeline-state.json');
   const state = readJsonSafe(stateFile);
