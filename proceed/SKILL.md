@@ -226,6 +226,15 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
 
 **Before doing anything else**, resolve the repository set, write a *pre-worktree* state file so the sprint dashboard sees the pipeline immediately, and prime the shared context. **Worktree creation is deferred until after Phase 1 (Validate Spec)** so a failed validation does not leave a stray worktree behind. See "Step 1.5: Create Worktrees After Validation" below for the worktree creation step.
 
+**Step 0a — Reconcile ghost REQs from prior runs.** Before any new pipeline work, run the deterministic state reconciler. It walks `.adlc/specs/*/requirement.md` and synthesizes a finalized `pipeline-state.json` for any REQ whose spec is `status: complete` and whose merge can be proven (via `gh pr list` or `git log` on `main`) but whose state file is missing or has `completed: false`. This catches the failure mode where a prior runner died after `gh pr merge` but before writing the terminal state — without this step those REQs would render as "spec only / stalled" on the dashboard forever and could collide with any new `/proceed` invocation that touches the same artifact paths. Pure bash, no LLM turn cost, idempotent:
+
+```sh
+sh .adlc/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1 \
+  || sh ~/.claude/skills/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1
+```
+
+(Two-level fallback per ADR-2: prefer the consumer-vendored copy, fall back to the toolkit copy.) If the reconciler heals anything, log it in the run header so the user knows. A non-zero exit from the reconciler means at least one ghost couldn't be healed (typically: merged PR not findable) — surface that as a warning but do NOT halt this `/proceed` run on it; the current REQ may not be the affected one.
+
 1. **Preflight** — verify all prerequisite files exist in the **primary** repo (stop with a clear message if any are missing):
    - `.adlc/context/project-overview.md` — run `/init` if missing
    - `.adlc/context/architecture.md` — run `/init` if missing
@@ -419,7 +428,9 @@ For each touched repo, run the reflector checklist, then correctness, quality, a
 
 **Step D — Re-verify (conditional)**: Re-run ONLY the 5 reviewer agents (not reflector) if Critical or must-fix Major items were fixed — up to 1 confirmation loop. Skip if only minor fixes were applied. Scope re-verify to the (repo, dimension) pairs that had fixes: e.g., if correctness fixes landed only in the api repo, rerun correctness-reviewer for that repo only. In subagent mode, re-run the corresponding reviewer checklists inline.
 
-**Step E — Platform validate (Salesforce ground-truth gate)**: Static review reasons about the code; the platform compiler is the only oracle that catches metadata-shape errors, Apex compile errors, missing fields, malformed FlexiPage XML, UI Bundle dist/ omissions, and feature-flag-gated metadata that exists in docs but not your org. Run a `sf project deploy validate` against the lowest-tier configured org **after** static fixes have been applied and **before** opening a PR. This step is mandatory whenever the project is a Salesforce project and at least one touched repo has Salesforce metadata in its diff — it is NOT gated by `complexity` (a `trivial` change can still ship broken metadata).
+**Step E — Platform validate (Salesforce ground-truth gate)**: Static review reasons about the code; the platform compiler is the only oracle that catches metadata-shape errors, Apex compile errors, missing fields, malformed FlexiPage XML, UI Bundle dist/ omissions, and feature-flag-gated metadata that exists in docs but not your org. Run a server-side validate against the lowest-tier configured org **after** static fixes have been applied and **before** opening a PR. This step is mandatory whenever the project is a Salesforce project and at least one touched repo has Salesforce metadata in its diff — it is NOT gated by `complexity` (a `trivial` change can still ship broken metadata).
+
+**CLI verb depends on the test level.** `sf project deploy validate` requires Apex tests — its `--test-level` allowlist is `RunAllTestsInOrg | RunLocalTests | RunSpecifiedTests | RunRelevantTests` and it rejects `NoTestRun` outright. For the metadata-only carve-out (no Apex in diff) we use `sf project deploy start --dry-run --test-level NoTestRun`, which exercises the same server-side compile/shape checks but does NOT save to the org. Both verbs return a validation id usable for `sf project deploy report` and (via `quick`) for production promotion.
 
 For each touched repo whose diff contains Salesforce metadata (any path under `force-app/`, or whatever `salesforce.workspace:` is set to in `.adlc/config.yml`), run inside that repo's worktree:
 
@@ -429,38 +440,62 @@ ALIAS=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*validate_org:/{p
 [ -z "$ALIAS" ] && ALIAS=$(awk '/^[[:space:]]*orgs:/{f=1} f && /^[[:space:]]*sandbox:/{print $2; exit}' .adlc/config.yml | tr -d '"')
 [ -z "$ALIAS" ] && ALIAS=$(awk '/^[[:space:]]*orgs:/{f=1} f && /^[[:space:]]*scratch:/{print $2; exit}' .adlc/config.yml | tr -d '"')
 
-# Resolve --test-level by reusing /canary Step 2b's diff-aware logic. Default to NoTestRun
-# when the diff is metadata-only (saves 5-10 min per validate); RunSpecifiedTests when only
-# a few Apex classes changed; RunLocalTests as a safe fallback.
+# Resolve --test-level by reusing /canary Step 2b's diff-aware logic.
 #
 # Metadata-only carve-out (per salesforce-rules.md "Unit Testing Requirements"): if the diff
 # only touches custom objects/fields, perm sets, layouts, FlexiPages, Flows-without-Apex,
 # static resources, etc. — i.e. NO `.cls`/`.trigger` files — a test class is NOT required.
-# We run validate with --test-level NoTestRun and reviewers MUST NOT flag missing tests.
+# Reviewers MUST NOT flag missing tests. NoTestRun is illegal for `deploy validate`, so we
+# switch to `deploy start --dry-run --test-level NoTestRun` for the metadata-only path.
 APEX_TOUCHED=$(git diff --name-only "origin/${integrationBranch:-main}...HEAD" | grep -E '\.(cls|trigger)$' | grep -vE '(Test|_Test)\.cls$' || true)
 if [ -z "$APEX_TOUCHED" ]; then TEST_LEVEL="NoTestRun"; else TEST_LEVEL="RunLocalTests"; fi
 
 WORKSPACE=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*workspace:/{print $2; exit}' .adlc/config.yml | tr -d '"')
 WORKSPACE=${WORKSPACE:-force-app}
 
-sf project deploy validate \
-  --target-org "$ALIAS" \
-  --source-dir "$WORKSPACE" \
-  --test-level "$TEST_LEVEL" \
-  --wait 5 \
-  --json
+if [ "$TEST_LEVEL" = "NoTestRun" ]; then
+  # Metadata-only path. `sf project deploy validate` rejects NoTestRun, so use
+  # `start --dry-run` — same server-side checks, nothing saved to the org.
+  sf project deploy start \
+    --dry-run \
+    --target-org "$ALIAS" \
+    --source-dir "$WORKSPACE" \
+    --test-level NoTestRun \
+    --wait 5 \
+    --json
+else
+  # Apex in diff — full validate with the resolved test level.
+  sf project deploy validate \
+    --target-org "$ALIAS" \
+    --source-dir "$WORKSPACE" \
+    --test-level "$TEST_LEVEL" \
+    --wait 5 \
+    --json
+fi
 ```
 
 **Wait cap = 5 minutes (hard cap, do not raise).** Each REQ in this pipeline is sized to be a small, isolated change set; a healthy validate against a sandbox should return in well under that. If the validate has not finished when `--wait 5` expires, the `sf` CLI returns a non-terminal "still running" response and the **pipeline must NOT block here** — capture the validation id, mark the gate as `running`, and continue to Phase 6. The validate keeps executing server-side and will be reconciled in Phase 7.
 
 ```sh
 # Capture the JSON; --wait 5 will return either a terminal status OR a still-running response.
-VALIDATE_JSON=$(sf project deploy validate \
-  --target-org "$ALIAS" \
-  --source-dir "$WORKSPACE" \
-  --test-level "$TEST_LEVEL" \
-  --wait 5 \
-  --json 2>&1 || true)
+# Verb is conditional on TEST_LEVEL — `validate` rejects NoTestRun, so the metadata-only
+# path uses `start --dry-run` instead. Both return the same JSON shape with `.result.id`.
+if [ "$TEST_LEVEL" = "NoTestRun" ]; then
+  VALIDATE_JSON=$(sf project deploy start \
+    --dry-run \
+    --target-org "$ALIAS" \
+    --source-dir "$WORKSPACE" \
+    --test-level NoTestRun \
+    --wait 5 \
+    --json 2>&1 || true)
+else
+  VALIDATE_JSON=$(sf project deploy validate \
+    --target-org "$ALIAS" \
+    --source-dir "$WORKSPACE" \
+    --test-level "$TEST_LEVEL" \
+    --wait 5 \
+    --json 2>&1 || true)
+fi
 
 VALIDATION_ID=$(echo "$VALIDATE_JSON" | jq -r '.result.id // empty')
 STATUS=$(echo "$VALIDATE_JSON" | jq -r '.result.status // empty')

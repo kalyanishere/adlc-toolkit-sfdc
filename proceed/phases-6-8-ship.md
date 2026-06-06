@@ -22,7 +22,7 @@ merge sequencing, and terminal-state contract live here.
 1. For each touched repo:
    - Inside that repo's worktree, ensure all changes are committed and push the feature branch: `git -C <worktree> push -u origin feat/REQ-xxx-short-description`
 2. Set the requirement status to `complete` in its frontmatter (primary repo only).
-3. **Detect the PR actor** — same probe used in Phase 8's local-bare fallback. If `origin` is a local bare path OR `gh` is unavailable/unauthenticated, **skip `gh pr create` for this repo** and write a synthetic marker URL `local-bare:<origin-path>#<branch>` to `repos[<id>].prUrl`. Phase 8 reads this marker and routes through the local hand-merge block. Do NOT halt here, do NOT prompt — the run continues straight to Phase 7 with a synthetic prUrl. End-of-phase log line: `<id>: local-bare origin — skipped gh pr create; will merge directly in Phase 8`.
+3. **Detect the PR actor** — same probe used in Phase 8's local-bare fallback. If `origin` is a local bare path OR `gh` is unavailable/unauthenticated, **skip `gh pr create` for this repo** and write a synthetic marker URL `local-bare:<origin-path>#<branch>` to `repos[<id>].prUrl`. The marker prefix MUST be exactly `local-bare:` — earlier revisions wrote `local-bare-origin:` and that prefix has been kept compatible in the Phase 8 detector, but new writes use the canonical form. Phase 8 reads this marker and routes through the local hand-merge block. Do NOT halt here, do NOT prompt — the run continues straight to Phase 7 with a synthetic prUrl. End-of-phase log line: `<id>: local-bare origin — skipped gh pr create; will merge directly in Phase 8`.
 4. Otherwise create a PR **in each touched repo** using `gh pr create` (invoke via `gh -R <owner/repo>` or by running `gh` from inside each worktree). In cross-repo mode, create the PR for the primary repo **last** so the primary PR body can link to all sibling PRs.
    - **Title (per repo)**: Short description referencing the REQ, tagged with the repo id when cross-repo (e.g., `feat(api): new endpoint [REQ-023]`).
    - **Body (per repo)**:
@@ -123,13 +123,15 @@ ORIGIN_URL=$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || true)
 
 # Local-bare detection: origin resolves to a filesystem path (not http/git/ssh/gh URL)
 # and that path exists. Includes file://, /abs/path, ./rel/path, and the prUrl marker
-# 'local-bare:' written by Phase 6 when gh was unavailable.
+# 'local-bare:' written by Phase 6 when gh was unavailable. We also tolerate the
+# legacy 'local-bare-origin:' prefix that earlier runner revisions wrote — both
+# mean "this PR was never opened against a hosted remote and must hand-merge here."
 case "$ORIGIN_URL" in
   http://*|https://*|git@*|ssh://*|git://*) IS_LOCAL_BARE=0 ;;
   file://*|/*|./*|../*) IS_LOCAL_BARE=1 ;;
   *) IS_LOCAL_BARE=0 ;;
 esac
-case "$PR_URL" in local-bare:*) IS_LOCAL_BARE=1 ;; esac
+case "$PR_URL" in local-bare:*|local-bare-origin:*) IS_LOCAL_BARE=1 ;; esac
 
 # gh availability: present, authenticated, and prUrl is a real https URL
 GH_OK=0
@@ -201,25 +203,57 @@ After the loop completes for all touched repos, fall through to **wrapup-then-cl
    - If the next repo's PR was opened against `main` and depends on the just-merged changes being present, trigger a rebase/retarget before merging it. When siblings were developed in parallel worktrees against the same pre-REQ main, this is usually a no-op — but surface any auto-merge failure to the user as a conflict halt (legitimate halt #3).
 2. Proceed to the **wrapup-then-cleanup** block below.
 
-**Wrapup-then-cleanup** (single-repo and cross-repo both reach this block):
+**Finalize-then-wrapup-then-cleanup** (single-repo and cross-repo both reach this block):
 
-The order here is **load-bearing**: `/wrapup` writes ADLC artifacts (lessons, assumptions, status updates) into the primary repo's main checkout. `git worktree remove` cannot run before `/wrapup`. Earlier revisions reversed this and lost every captured lesson when the worktree was torn down.
+The order is **load-bearing** in two ways:
 
-1. **Run `/wrapup` with an explicit `--main-root`** so it doesn't have to re-derive `<ARTIFACT_ROOT>` from cwd:
-   ```
-   /wrapup REQ-xxx --main-root <repos[<primary-id>].path> [--touched-repos <id>,<id>,...]
-   ```
-   - `<primary-id>` is the entry in `repos` with `primary: true`.
-   - `<repos[<primary-id>].path>` is the absolute path to the primary repo's **main checkout** (NOT its worktree under `.worktrees/REQ-xxx/`). This value was frozen by Phase 0 step 8 and is the same across all phases of the run.
-   - In cross-repo mode also pass the comma-separated list of touched repo ids so `/wrapup` can emit the cross-repo ship summary and walk each sibling for deploy.
-   - `/wrapup` will: update spec/task statuses, append assumptions/lessons, run any Salesforce gates (Step 3a/3b), generate the ship summary, deploy via `/canary`, and (Step 4b) commit the ADLC artifact changes onto `main` in the primary repo as a separate `chore(REQ-xxx): capture knowledge ...` commit.
-2. **Verify `/wrapup` succeeded** before proceeding to cleanup. If it surfaced a Salesforce permset blocker or a deploy failure, STOP — do NOT remove the worktree. The user resolves the blocker and re-runs `/wrapup` (or `/canary` directly) before the pipeline can finish.
-3. **Now remove the worktree in each touched repo**, using the absolute path from state:
-   ```
-   git -C <repo-path> worktree remove <repos[<id>].worktree>
-   ```
-   Do NOT use the relative `.worktrees/REQ-xxx` form here. Removal is safe at this point: `/wrapup` Step 4b already committed the captured knowledge to the main checkout, which is a separate working tree.
-4. Update `pipeline-state.json` with `"completed": true`.
-5. The pipeline is now complete.
+1. **State finalization MUST come first** (immediately after `gh pr merge` / hand-merge confirms the merge landed). The runner is most likely to die in late Phase 8 — context exhaustion, ask-prompt timeouts, provider truncation — and the failure mode that bites hardest is "merged on remote, but no `pipeline-state.json` finalization on disk." The dashboard then shows a permanent "spec only" / "stalled" ghost on a REQ that already shipped. By writing the terminal flags before `/wrapup` runs, even a runner that dies during wrapup or worktree-removal leaves the dashboard correctly green. Worst case: a green REQ whose lessons weren't captured, which is recoverable by re-running `/wrapup REQ-xxx` later. Best case: nothing dies and everything happens.
+2. **`/wrapup` MUST run before worktree removal.** `/wrapup` writes ADLC artifacts (lessons, assumptions, status updates) into the primary repo's main checkout. Earlier revisions removed the worktree first and lost every captured lesson. Don't reverse this.
+
+**Step 1 — Finalize state (single atomic write, must happen first)**:
+
+Run this immediately after the merge confirmation in any path above (single-repo `gh pr merge`, single-repo local hand-merge, or cross-repo `mergeOrder` walk). It's idempotent: re-running it on an already-finalized state is a no-op. The bash output of `date -u +"%Y-%m-%dT%H:%M:%SZ"` is the canonical `<now>` (LLM has no clock; do NOT type a timestamp).
+
+```jq-style update applied via Edit/Write to pipeline-state.json
+{
+  "completed": true,
+  "terminalState": "merged",
+  "currentPhase": 8,
+  "currentPhaseStartedAt": null,
+  "completedPhases": [...completedPhases, 8 if not already present],
+  "phaseHistory": [...phaseHistory, {phase: 8, name: "Wrapup and Merge", startedAt: <currentPhaseStartedAt>, completedAt: <now>}],
+  "repos": {
+    "<id>": {
+      ...,
+      "merged": true,
+      "mergedAt": <now>,                   // overwrite if already set; gh pr view truth wins on next reconcile
+      "mergeCommit": <sha-from-gh-or-git>  // optional but useful for the reconciler later
+    }
+  }
+}
+```
+
+This is the **load-bearing finality**. After this write, the dashboard correctly shows the REQ as `merged` regardless of what happens next. Every subsequent step is best-effort cleanup that the reconciler (`tools/reconcile-pipeline-state/reconcile.sh`) can also recover post-hoc, but state finalization itself is what the dashboard reads — so it MUST land first.
+
+**Step 2 — Run `/wrapup` with an explicit `--main-root`** so it doesn't have to re-derive `<ARTIFACT_ROOT>` from cwd:
+```
+/wrapup REQ-xxx --main-root <repos[<primary-id>].path> [--touched-repos <id>,<id>,...]
+```
+- `<primary-id>` is the entry in `repos` with `primary: true`.
+- `<repos[<primary-id>].path>` is the absolute path to the primary repo's **main checkout** (NOT its worktree under `.worktrees/REQ-xxx/`). This value was frozen by Phase 0 step 8 and is the same across all phases of the run.
+- In cross-repo mode also pass the comma-separated list of touched repo ids so `/wrapup` can emit the cross-repo ship summary and walk each sibling for deploy.
+- `/wrapup` will: update spec/task statuses, append assumptions/lessons, run any Salesforce gates (Step 3a/3b), generate the ship summary, deploy via `/canary`, and (Step 4b) commit the ADLC artifact changes onto `main` in the primary repo as a separate `chore(REQ-xxx): capture knowledge ...` commit.
+
+**Step 3 — Verify `/wrapup` succeeded** before proceeding to cleanup. If it surfaced a Salesforce permset blocker or a deploy failure, STOP — do NOT remove the worktree. The user resolves the blocker and re-runs `/wrapup` (or `/canary` directly). Note: state finalization (Step 1) has already happened, so the dashboard correctly shows the REQ as merged regardless. The wrapup blocker is a **deploy blocker**, not a **merge blocker**.
+
+**Step 4 — Remove the worktree in each touched repo**, using the absolute path from state:
+```
+git -C <repo-path> worktree remove <repos[<id>].worktree>
+```
+Do NOT use the relative `.worktrees/REQ-xxx` form here. Removal is safe at this point: `/wrapup` Step 4b already committed the captured knowledge to the main checkout, which is a separate working tree.
+
+**Step 5 — Pipeline is complete.** State finalization landed in Step 1; `/wrapup` captured knowledge in Step 2; worktrees were torn down in Step 4. Emit the ship summary.
 
 **End-of-phase log**: Emit the ship summary from wrapup including per-repo merge confirmations and deployment status. Pipeline complete.
+
+**Recovery / reconciliation**: if a runner dies between Step 1 (state finalize) and Step 5, the dashboard still shows the REQ as `merged` — that's the whole point of writing finalization first. To recover whatever Step 2-4 work was missed, run `tools/reconcile-pipeline-state/reconcile.sh` (which also synthesizes Step 1's state file for older runs that pre-date this contract) and then `/wrapup REQ-xxx --main-root <primary>` if lessons / assumptions need to be captured retroactively.

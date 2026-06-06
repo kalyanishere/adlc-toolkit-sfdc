@@ -94,6 +94,27 @@ If the user passed `--workflow` but the `Workflow` tool is unavailable, say so e
 
 ### Step 1: Identify Sprint REQs
 
+**Pre-flight reconciliation** — before scoring eligibility, run the
+ghost-REQ reconciler so any prior sprint that died in late Phase 8 doesn't
+poison eligibility now. This is a pure-bash, deterministic script (no LLM
+turn cost) that walks every `.adlc/specs/*/requirement.md` and synthesizes
+a finalized `pipeline-state.json` for any REQ where the spec is `complete`,
+a merged PR / merge commit can be located, but the state file is missing
+or has `completed: false`. Idempotent — re-running on a clean project is
+a no-op:
+
+```sh
+sh .adlc/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1 \
+  || sh ~/.claude/skills/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1
+```
+
+(The two-level fallback mirrors ADR-2: prefer the consumer-vendored copy,
+fall back to the toolkit copy.) Surface anything the reconciler healed in
+the pre-flight log so the user sees it. Failed-to-heal ghosts (exit 1)
+must be surfaced as eligibility issues for the affected REQs — running
+`/sprint` over a project with unhealed ghosts is allowed but should be
+called out, not silently swallowed.
+
 1. If given specific REQ IDs (e.g., `REQ-091 REQ-092`), normalize each to `REQ-xxx` format
 2. If given `all`, scan `.adlc/specs/REQ-*/requirement.md` for all specs with `status: approved` or `status: draft`
 3. If no argument, scan for all `status: approved` specs

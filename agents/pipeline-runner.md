@@ -132,19 +132,152 @@ After running all checklists, fix Critical and Major issues inline. Commit fixes
 
 The merge actor depends on REQ topology, decided from `pipeline-state.json.repos`:
 
-- **Single-repo REQ** (exactly one entry in `repos` with `touched: true`): **YOU own the merge.** Run `gh pr merge <prUrl> --squash --delete-branch` from the **parent repo path** (`repos[<id>].path`), NOT from your worktree (`repos[<id>].worktree`). Git will refuse to delete a branch that's checked out in another worktree. After successful merge, set `repos[<id>].merged = true` in `pipeline-state.json` immediately. Your terminal claim is `merged`.
+- **Single-repo REQ** (exactly one entry in `repos` with `touched: true`): **YOU own the merge.** Run the merge actor probe below to decide between `gh pr merge` (hosted remote) and the local hand-merge block (local bare origin / no `gh`). After a successful merge — by either path — set `repos[<id>].merged = true` in `pipeline-state.json` immediately. Your terminal claim is `merged`.
 
 - **Cross-repo REQ** (more than one touched repo): **STOP after Phase 7.** Do NOT attempt to merge — the orchestrator sequences merges per `mergeOrder`. Your terminal claim is `pr-ready`.
 
 If the orchestrator's dispatch prompt explicitly overrides the topology rule (e.g., "you own the merge for this single-repo REQ", or conversely "do not merge — orchestrator will handle"), follow the override and reflect it in your terminal claim.
 
+### Merge actor probe (run BEFORE attempting `gh pr merge`)
+
+Probe each touched repo's origin and the `gh` CLI **once** to pick the actor. Local-bare repos (path-based remotes; no GitHub host) and unauthenticated `gh` setups CANNOT use `gh pr merge` — they MUST go through the hand-merge block below. Halting at `pr-ready` for a local-bare origin is a protocol violation: those REQs have no human merger and would stall every dependent REQ until someone notices.
+
+```sh
+REPO_PATH="${repos[<id>].path}"
+PR_URL="${repos[<id>].prUrl}"
+ORIGIN_URL=$(git -C "$REPO_PATH" remote get-url origin 2>/dev/null || true)
+
+# Local-bare detection: origin resolves to a filesystem path (not http/git/ssh/gh URL)
+# OR the prUrl carries a synthetic local-bare marker. Tolerate both spec-canonical
+# `local-bare:` and the legacy `local-bare-origin:` prefix runners have written.
+case "$ORIGIN_URL" in
+  http://*|https://*|git@*|ssh://*|git://*) IS_LOCAL_BARE=0 ;;
+  file://*|/*|./*|../*) IS_LOCAL_BARE=1 ;;
+  *) IS_LOCAL_BARE=0 ;;
+esac
+case "$PR_URL" in local-bare:*|local-bare-origin:*) IS_LOCAL_BARE=1 ;; esac
+
+# gh availability: present, authenticated, and prUrl is a real https URL
+GH_OK=0
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  case "$PR_URL" in https://github.com/*|https://*/pull/*) GH_OK=1 ;; esac
+fi
+```
+
+Routing:
+
+| `IS_LOCAL_BARE` | `GH_OK` | Actor |
+|---|---|---|
+| 0 | 1 | **Use `gh pr merge`** — proceed with the hosted-remote block below. Terminal claim: `merged`. |
+| 1 | * | **Use the local hand-merge block.** Terminal claim: `merged` — NEVER `pr-ready` for a local-bare repo. |
+| 0 | 0 | **Halt as `blocked`** — a hosted remote needs `gh`. Surface: `gh CLI required for hosted remote <origin> but is unavailable / unauthenticated. Run \`gh auth login\` and re-run.` |
+
+### Hosted-remote merge block (`IS_LOCAL_BARE=0`, `GH_OK=1`)
+
+Run `gh pr merge <prUrl> --squash --delete-branch` from `repos[<id>].path` (NOT the worktree — git refuses to delete a branch checked out by a worktree). On success, `repos[<id>].merged = true` and proceed to wrapup-then-cleanup.
+
+### Local hand-merge block (`IS_LOCAL_BARE=1`)
+
+```sh
+INTEGRATION="${integrationBranch:-main}"          # from pipeline-state.json
+FEAT="${repos[<id>].branch}"                       # feat/REQ-xxx-...
+REPO_PATH="${repos[<id>].path}"                    # main checkout, NOT the worktree
+WORKTREE="${repos[<id>].worktree}"                 # absolute path; needed for cleanup
+
+# Already-merged guard (recovering from an interrupted run)
+if [ "$(jq -r ".repos[\"<id>\"].merged" pipeline-state.json)" = "true" ]; then
+  echo "<id>: already merged — skipping"
+else
+  # 1. Land the integration branch's tip locally before merging.
+  git -C "$REPO_PATH" fetch origin "$INTEGRATION" "$FEAT"
+  git -C "$REPO_PATH" checkout "$INTEGRATION"
+  git -C "$REPO_PATH" reset --hard "origin/$INTEGRATION"
+
+  # 2. Mergeability probe — abort if the merge would conflict.
+  if git -C "$REPO_PATH" merge-tree "origin/$INTEGRATION" "origin/$FEAT" \
+      | grep -E '^(<<<<<<< |\+<<<<<<< )' >/dev/null; then
+    echo "HALT: merge conflict between $FEAT and $INTEGRATION in <id>. Resolve manually."
+    # Set blocker, terminal claim 'blocked'. Do NOT auto-resolve.
+    exit 1
+  fi
+
+  # 3. Merge with --no-ff so the merge commit preserves the REQ boundary.
+  git -C "$REPO_PATH" merge --no-ff "origin/$FEAT" \
+    -m "merge: <id> REQ-xxx <short-title>"
+
+  # 4. Push integration branch back to origin (works for local bare repos —
+  #    push to a filesystem path is just a pack copy).
+  git -C "$REPO_PATH" push origin "$INTEGRATION"
+
+  # 5. Delete the feature branch on origin (the worktree still owns the local
+  #    copy; that's removed in the cleanup block below).
+  git -C "$REPO_PATH" push origin --delete "$FEAT" || true
+
+  # 6. State write — same shape gh-merge would have produced.
+  jq ".repos[\"<id>\"].merged = true" pipeline-state.json > .tmp && mv .tmp pipeline-state.json
+fi
+```
+
+A real merge conflict at step 2 is a legitimate halt. Set `pipeline-state.json.blockers[]` and emit terminal claim `blocked`. NEVER terminate a local-bare REQ as `pr-ready` — that is a protocol violation; the local hand-merge block is the actor and either lands `merged` or halts `blocked`.
+
+After the merge lands (by either path), proceed to **wrapup-then-cleanup**. The pipeline owns this — do not stop at `pr-ready`.
+
+### Finalize-then-wrapup-then-cleanup (mandatory after every successful merge)
+
+The order is **load-bearing in two ways**:
+
+1. **State finalization MUST come FIRST.** Late-Phase-8 deaths (context exhaustion, ask-prompt timeouts, provider truncation) are the most common failure mode in this pipeline. The failure that bites hardest is "merged on remote, but no `pipeline-state.json` finalization on disk" — the dashboard then shows a permanent "spec only" ghost on a REQ that already shipped. By writing the terminal flags BEFORE running `/wrapup`, a runner that dies during wrapup or worktree-removal still leaves the dashboard correctly green. Worst case: a green REQ whose lessons weren't captured (recoverable by re-running `/wrapup REQ-xxx`). Best case: nothing dies and every step happens.
+2. **`/wrapup` MUST run before worktree removal.** It writes ADLC artifacts (lessons, assumptions, status updates) into the primary repo's main checkout. Earlier revisions removed the worktree first and lost every captured lesson.
+
+**Step 1 — Finalize pipeline-state.json IMMEDIATELY after the merge confirmation.** Single atomic write, idempotent. `<now>` MUST come from `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash — do NOT type a timestamp. Apply via Edit/Write to the worktree's `pipeline-state.json`:
+
+```
+{
+  "completed": true,
+  "terminalState": "merged",
+  "currentPhase": 8,
+  "currentPhaseStartedAt": null,
+  "completedPhases": [...prev, 8],            // append 8 if not already there
+  "phaseHistory":   [...prev, {phase:8, name:"Wrapup and Merge", startedAt:<currentPhaseStartedAt>, completedAt:<now>}],
+  "repos": {
+    "<id>": {
+      ...,
+      "merged": true,
+      "mergedAt":  <now>,
+      "mergeCommit": <sha-from-gh-or-git>
+    }
+  }
+}
+```
+
+This write is the load-bearing finality. After it lands, the dashboard correctly shows `merged` regardless of what happens to the rest of Phase 8. Every subsequent step is best-effort cleanup that `tools/reconcile-pipeline-state/reconcile.sh` can also recover post-hoc — but state finalization itself MUST land here.
+
+**Step 2 — Run `/wrapup`**:
+```
+/wrapup REQ-xxx --main-root <repos[<primary-id>].path>
+```
+(In cross-repo mode also pass `--touched-repos <id>,<id>,...`.)
+
+**Step 3 — Verify `/wrapup` succeeded.** If it surfaced a Salesforce permset blocker or deploy failure, STOP and emit terminal claim `blocked`. State finalization (Step 1) already landed, so the dashboard shows the REQ as `merged` — but a blocker on `/wrapup` is a *deploy blocker*, not a *merge blocker*, and the user needs to resolve it. The next `/wrapup REQ-xxx` invocation is a clean retry; do NOT re-merge.
+
+**Step 4 — Remove the worktree in each touched repo**, using the absolute path from state:
+```sh
+git -C <repo-path> worktree remove <repos[<id>].worktree>
+# If branch deletion failed because the worktree owned it, retry now:
+git -C <repo-path> branch -D <repos[<id>].branch> 2>/dev/null || true
+```
+
+**Step 5 — Terminal claim is `merged`. Pipeline is done.**
+
+**If your context is running thin in late Phase 8** — the runner has been told its final text IS the terminal-state claim, and the most common death cause is exiting before Step 1 completes. **Step 1 is the single most important write in the entire pipeline.** If you must skip something to get there, skip the wrapup chore commit message refinements, skip the cross-repo ship summary embellishments, skip the celebration prose. Do not skip Step 1. The reconciler can recover Step 2-4 work; nothing recovers a skipped Step 1 except a manual hand-write or a re-run of the reconciler at the next `/sprint`/`/proceed` startup.
+
 ### Worktree gotchas
 
 When merging from inside a pipeline-runner subagent:
 
-1. **Merge from parent repo, not worktree.** `gh pr merge --delete-branch` invoked from the worktree fails because git refuses to delete a branch that's currently checked out (the worktree owns it). Always `cd` to `repos[<id>].path` before invoking. Use absolute paths since shell state does not persist between Bash calls.
-2. **Worktree cleanup after remote merge.** If `git branch -D <branch>` fails locally after the remote PR is merged, the worktree still owns the branch. Run `git worktree remove --force <worktree-path>` first, then `git branch -D <branch>`. The remote PR being `MERGED` is the canonical signal of success — local cleanup failure is recoverable and does not block the terminal `merged` claim.
-3. **State write is mandatory.** Immediately after a successful `gh pr merge`, set `repos[<id>].merged = true` in `pipeline-state.json` so a mid-Phase-8 interruption can resume without double-merging.
+1. **Merge from parent repo, not worktree.** `gh pr merge --delete-branch` (and `git push origin --delete <feat>` in the local hand-merge block) invoked from the worktree fails because git refuses to delete a branch that's currently checked out (the worktree owns it). Always `git -C <repo-path>` against `repos[<id>].path`. Use absolute paths since shell state does not persist between Bash calls.
+2. **Worktree cleanup after merge.** If `git branch -D <branch>` fails locally after the merge, the worktree still owns the branch. Run `git worktree remove --force <worktree-path>` first, then `git branch -D <branch>`. The merge having landed (PR `MERGED` for hosted, `origin/<integration>` containing the feat tip for local-bare) is the canonical signal of success — local cleanup hiccups are recoverable and do not block the terminal `merged` claim, but you MUST still attempt the cleanup before exiting.
+3. **State write is mandatory.** Immediately after a successful merge, set `repos[<id>].merged = true` in `pipeline-state.json` so a mid-Phase-8 interruption can resume without double-merging. After cleanup, also set `completed: true` and `terminalState: "merged"`.
 
 ## Terminal state contract
 
@@ -152,9 +285,9 @@ Your final report MUST lead with **exactly one** terminal-state tag from the tab
 
 | Tag | Required preconditions | Orchestrator response |
 |---|---|---|
-| `merged` | All touched-repo PRs are `MERGED` (verifiable via `gh pr view --json state,mergedAt`). `repos[<id>].merged == true` for every touched repo in pipeline-state. | Orchestrator verifies, then moves on. |
-| `pr-ready` | All touched-repo PRs are `OPEN`, `MERGEABLE`, with all required CI green. | Orchestrator merges per `mergeOrder`. |
-| `blocked` | Blocker requires human input. `pipeline-state.json.blockers` populated with details. PR may be in any state. | Orchestrator surfaces to user, halts that REQ. |
+| `merged` | Every touched-repo merge landed. Hosted: PR `MERGED` (verifiable via `gh pr view --json state,mergedAt`). Local-bare: `origin/<integrationBranch>` contains the feat-branch tip (verifiable via `git -C <repo-path> merge-base --is-ancestor origin/<feat> origin/<integration>`). `repos[<id>].merged == true` for every touched repo. **Local-bare REQs MUST land here** — `pr-ready` is illegal for them. | Orchestrator verifies, then moves on. |
+| `pr-ready` | **Hosted-remote-only, cross-repo only.** All touched-repo PRs are `OPEN`, `MERGEABLE`, all required CI green. | Orchestrator merges per `mergeOrder`. |
+| `blocked` | Blocker requires human input. `pipeline-state.json.blockers` populated with details. Examples: 3× validation failure, reflector userFacing question, real merge conflict, hosted remote with no `gh`. | Orchestrator surfaces to user, halts that REQ. |
 | `failed` | Pipeline failed past automatic recovery. Failure details in `pipeline-state.json.notes`. | Orchestrator surfaces to user, halts that REQ. |
 
 Format your report's first line as: `Terminal state: <tag>` followed by the standard report body.

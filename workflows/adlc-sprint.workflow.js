@@ -1252,38 +1252,86 @@ function cleanupAndWatchCIPrompt(id, prs) {
 
 // --- Phase 8 prompt builders (wrapup / merge + gh re-verification) ----------
 
-// mergePrompt — instruct the IO agent to self-merge a SINGLE-REPO REQ. Per the
-// legacy topology (pipeline-runner.md Phase 8), `gh pr merge --delete-branch`
-// MUST run from the PARENT repo path, not the worktree, because git refuses to
-// delete a branch checked out by a worktree. After a successful merge the agent
-// sets pipeline-state.json.repos[<repo>].merged = true immediately (resumable,
-// no double-merge). The CRITICAL re-verification gate (gh pr view) is enforced by
-// the SCRIPT in a SEPARATE leaf (see verifyMergedPrompt) — claim ≠ truth (BR-6).
+// mergePrompt — instruct the IO agent to self-merge a SINGLE-REPO REQ. Two
+// possible actors: hosted-remote (`gh pr merge --delete-branch` from the parent
+// repo path) OR local-bare (no GitHub host; merge into the integration branch by
+// hand and push to the bare origin). The agent probes which actor applies and
+// runs the matching block. After a successful merge the agent sets
+// pipeline-state.json.repos[<repo>].merged = true immediately (resumable, no
+// double-merge). The hosted re-verification gate (gh pr view) is enforced by the
+// SCRIPT in a SEPARATE leaf (see verifyMergedPrompt); local-bare is verified by
+// `git merge-base --is-ancestor` against the integration branch — claim ≠ truth
+// either way (BR-6).
+//
+// CRITICAL: NEVER halt a single-repo REQ at `pr-ready`. A local-bare repo has no
+// human merger and would stall every dependent REQ until someone notices. The
+// agent's only legitimate halts here are mergeConflict=true (real conflict) or a
+// missing `gh` against a hosted remote.
 function mergePrompt(id, repo, pr) {
+  const integration = repo.integrationBranch || '<integrationBranch-unresolved>';
   return [
     `Phase 8 merge for ${id}: this is a SINGLE-REPO REQ, so YOU own the merge.`,
-    `Merge PR ${pr.url} (repo ${repo.repo}) into origin/${repo.integrationBranch || '<integrationBranch-unresolved>'}.`,
+    `Merge ${pr.url} (repo ${repo.repo}) into origin/${integration}.`,
     '',
-    'Steps:',
-    '  1. Confirm the PR is OPEN and MERGEABLE with CI green',
-    `     (\`gh pr view ${pr.url} --json state,mergeStateStatus\`). If it is NOT`,
-    '     mergeable due to a MERGE CONFLICT, STOP and report mergeConflict=true —',
-    '     do NOT force anything.',
-    `  2. Merge from the PARENT repo path (\`${repo.worktree}\`\'s repo root), NOT`,
-    '     the worktree, because git refuses to delete a branch checked out by a',
-    `     worktree: \`gh pr merge ${pr.url} --squash --delete-branch\`.`,
-    '  3. Immediately set pipeline-state.json.repos[<repo>].merged = true.',
+    'STEP 1 — actor probe. Decide hosted-remote vs local-bare ONCE per repo:',
+    '',
+    '  ORIGIN_URL=$(git -C <repos[<id>].path> remote get-url origin 2>/dev/null || true)',
+    '  case "$ORIGIN_URL" in',
+    '    http://*|https://*|git@*|ssh://*|git://*) IS_LOCAL_BARE=0 ;;',
+    '    file://*|/*|./*|../*) IS_LOCAL_BARE=1 ;;',
+    '    *) IS_LOCAL_BARE=0 ;;',
+    '  esac',
+    '  # The PR url itself may carry a local-bare marker (Phase 6 wrote it when gh',
+    '  # was absent). Tolerate the canonical "local-bare:" and the legacy',
+    '  # "local-bare-origin:" prefix.',
+    `  case "${pr.url}" in local-bare:*|local-bare-origin:*) IS_LOCAL_BARE=1 ;; esac`,
+    '  GH_OK=0',
+    '  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then',
+    `    case "${pr.url}" in https://github.com/*|https://*/pull/*) GH_OK=1 ;; esac`,
+    '  fi',
+    '',
+    'STEP 2A — hosted-remote merge (IS_LOCAL_BARE=0, GH_OK=1):',
+    `  1. \`gh pr view ${pr.url} --json state,mergeStateStatus\` — must be OPEN +`,
+    '     MERGEABLE. On a real MERGE CONFLICT, STOP and report mergeConflict=true.',
+    '  2. Merge from the PARENT repo path (NOT the worktree, because git refuses to',
+    '     delete a branch checked out by a worktree):',
+    `     \`gh pr merge ${pr.url} --squash --delete-branch\` (run with \`git -C ${repo.worktree.replace(/\/\.worktrees\/.+$/, '')}\` form).`,
+    '  3. Set pipeline-state.json.repos[<repo>].merged = true.',
+    '',
+    'STEP 2B — local-bare hand-merge (IS_LOCAL_BARE=1, regardless of GH_OK):',
+    '  Run from the PARENT repo path (NOT the worktree). The branch is owned by',
+    '  the worktree, so attempts to delete the local feature branch BEFORE the',
+    '  worktree is removed will fail — that cleanup happens after wrapup.',
+    `    git -C <repos[<id>].path> fetch origin ${integration} ${repo.branch || '<feat-branch>'}`,
+    `    git -C <repos[<id>].path> checkout ${integration}`,
+    `    git -C <repos[<id>].path> reset --hard origin/${integration}`,
+    `    # Conflict probe — abort if the merge would conflict.`,
+    `    if git -C <repos[<id>].path> merge-tree origin/${integration} origin/${repo.branch || '<feat>'} | grep -E '^(<<<<<<< |\\+<<<<<<< )' >/dev/null; then`,
+    '      # Real merge conflict — STOP and report mergeConflict=true.',
+    '      exit 1',
+    '    fi',
+    `    git -C <repos[<id>].path> merge --no-ff origin/${repo.branch || '<feat>'} -m "merge: ${repo.repo} ${id}"`,
+    `    git -C <repos[<id>].path> push origin ${integration}`,
+    `    git -C <repos[<id>].path> push origin --delete ${repo.branch || '<feat>'} || true`,
+    '  Set pipeline-state.json.repos[<repo>].merged = true.',
+    '',
+    'STEP 2C — illegal: hosted remote without gh (IS_LOCAL_BARE=0, GH_OK=0).',
+    '  Stop and report mergeConflict=false, merged=false, with detail explaining',
+    '  the gh requirement. The script will surface this as a blocked terminal.',
     '',
     'Report mergeConflict (true ONLY on a real merge conflict) and merged (true if',
-    'you ran the merge command without error). The script independently re-verifies',
-    'the merge with `gh pr view` — your claim is not accepted on its own.',
+    'either step 2A or 2B ran without error). The script re-verifies hosted merges',
+    'with `gh pr view` and local-bare merges with',
+    '`git merge-base --is-ancestor origin/<feat> origin/<integration>` — your claim',
+    'is not accepted on its own.',
   ].join('\n');
 }
 
 // verifyMergedPrompt — the "claim ≠ truth" re-verification leaf (BR-6, ADR-7).
-// For each PR the agent runs `gh pr view <url> --json state,mergedAt` and reports
-// the GROUND TRUTH (state + whether mergedAt is set). The script decides merged /
-// not-merged off THIS, never off the merge agent's self-claim.
+// For each PR the agent runs the appropriate ground-truth check (gh for hosted
+// remotes, `git merge-base --is-ancestor` for local-bare) and reports a unified
+// MERGED|OPEN|CLOSED state. The script decides merged/not-merged off THIS, never
+// off the merge agent's self-claim.
 function verifyMergedPrompt(id, prs) {
   const prList = (prs || []).map((p) => `${p.repo}: ${p.url}`).join('; ');
   return [
@@ -1292,12 +1340,38 @@ function verifyMergedPrompt(id, prs) {
     'the script trusts over any earlier merge claim. (BR-6, Verify Don\'t Trust)',
     '',
     `For EACH PR (repo: url): ${prList || '(none)'}`,
-    '  run `gh pr view <url> --json state,mergedAt` and report:',
-    '    - repo, url',
-    '    - state: the literal state string (OPEN | MERGED | CLOSED)',
-    '    - mergedAt: the timestamp string if set, else omit it',
     '',
-    'Return the PR_VERIFY schema object: one entry per PR.',
+    '  1. Detect the verification path:',
+    '       case "<url>" in',
+    '         local-bare:*|local-bare-origin:*) PATH_LOCAL=1 ;;',
+    '         *) PATH_LOCAL=0 ;;',
+    '       esac',
+    '     If <url> looks like a real https URL but `gh` is unavailable, treat it',
+    '     as local for verification purposes — the merge could only have happened',
+    '     via the local hand-merge block.',
+    '',
+    '  2A. Hosted path (PATH_LOCAL=0):',
+    '       run `gh pr view <url> --json state,mergedAt` and report:',
+    '         - state: the literal gh state (OPEN | MERGED | CLOSED)',
+    '         - mergedAt: the timestamp string if set, else omit it',
+    '',
+    '  2B. Local-bare path (PATH_LOCAL=1):',
+    '       Read repos[<repo>].path, repos[<repo>].branch, and integrationBranch',
+    '       from pipeline-state.json. Then verify the feat tip is contained:',
+    '         git -C <path> fetch origin <integrationBranch> <branch> 2>/dev/null',
+    '         if git -C <path> merge-base --is-ancestor \\',
+    '             origin/<branch> origin/<integrationBranch>; then',
+    '           # The feat is in the integration branch — this is the local-bare',
+    '           # equivalent of MERGED.',
+    '           state=MERGED',
+    '         else',
+    '           state=OPEN',
+    '         fi',
+    '       Report state=MERGED or state=OPEN. Omit mergedAt (the local-bare path',
+    '       has no PR; the merge commit timestamp is good enough but not required).',
+    '',
+    'Return the PR_VERIFY schema object: one entry per PR with repo, url, state',
+    '(literal MERGED|OPEN|CLOSED), and mergedAt when known.',
   ].join('\n');
 }
 
@@ -1634,6 +1708,10 @@ async function wrapupAndMerge(id, P, repos, PR_STATE) {
   // ONLY when the ground truth says so (BR-6).
   const verifiedPrs = await verifyPrStates(id, P, prs);
   if (allMerged(verifiedPrs)) {
+    // Run wrapup + worktree cleanup. Without this, the worktree sits around
+    // forever and the dashboard shows a perpetual "stalled" pulse on a REQ
+    // whose merge has actually landed.
+    await wrapupAndCleanup(id, P, repos);
     return { state: 'merged', id, prs: stripVerifyMarkers(verifiedPrs) };
   }
 
@@ -1644,6 +1722,80 @@ async function wrapupAndMerge(id, P, repos, PR_STATE) {
     reason: 'merge claim could not be verified via gh pr view (state != MERGED)',
     detail: `verified: ${JSON.stringify(verifiedPrs)}`,
   });
+}
+
+// wrapupAndCleanup — invoked AFTER a verified merge. Runs /wrapup against the
+// primary repo's main checkout (knowledge capture), then removes every touched
+// repo's worktree using the absolute path recorded in repos[<id>].worktree, then
+// flips pipeline-state.json's terminal flags (completed:true, terminalState:
+// 'merged', currentPhaseStartedAt:null). Without this step the dashboard stays
+// "stalled" because completed never flips. Order is load-bearing — /wrapup MUST
+// run BEFORE worktree removal (the lessons/assumptions it writes go to the main
+// checkout, but it reads spec context that may live in the worktree).
+async function wrapupAndCleanup(id, P, repos) {
+  const touched = repos || [];
+  const primary = touched.find((r) => r.primary) || touched[0];
+  await agent(wrapupCleanupPrompt(id, primary, touched), {
+    ...P,
+    label: `${id} phase8-wrapup-cleanup`,
+    // Default workflow subagent — a generic /wrapup + git worktree remove + state
+    // write IO worker. No agentType (this is plumbing, not a specialist).
+  });
+}
+
+// wrapupCleanupPrompt — instruct the cleanup leaf to do three things in this
+// EXACT order: (1) flip the pipeline-state terminal flags FIRST so the dashboard
+// shows merged the moment we know the merge landed, (2) run /wrapup, (3) remove
+// every touched-repo worktree. The state-flag flip is FIRST not last because the
+// most common failure mode is a leaf that dies during /wrapup or worktree-remove
+// — and the dashboard ghost (merged on remote, "spec only" locally) is the
+// nastiest visible symptom. Writing the terminal flags first means a leaf that
+// dies during 2 or 3 still leaves the dashboard correctly green; the reconciler
+// (tools/reconcile-pipeline-state) can recover any missed step 2/3 work.
+function wrapupCleanupPrompt(id, primary, touched) {
+  const cleanupLines = (touched || []).map(
+    (r) => `   git -C ${r.path || '<repos[' + r.repo + '].path>'} worktree remove ${r.worktree || '<worktree>'} || git -C ${r.path || '<repos[' + r.repo + '].path>'} worktree remove --force ${r.worktree || '<worktree>'}`,
+  );
+  const touchedIds = (touched || []).map((r) => r.repo).join(',');
+  const stateFile = `${primary && primary.path ? primary.path : '<primary-path>'}/.adlc/specs/${id}-*/pipeline-state.json`;
+  return [
+    `Phase 8 finalize-then-wrapup-then-cleanup for ${id}: the merge has landed and been`,
+    'verified. Order is load-bearing: state-flag flip FIRST (so the dashboard is',
+    'green the moment we know the merge landed), THEN /wrapup, THEN worktree removal.',
+    'A leaf that dies after step 1 still leaves the dashboard correct; the reconciler',
+    'tool can recover step 2/3 work post-hoc, but nothing recovers a skipped step 1',
+    'until the next reconciler run, and the dashboard ghost is the nastiest symptom.',
+    '',
+    '1. Flip pipeline-state.json terminal flags FIRST in the PRIMARY MAIN CHECKOUT',
+    `   (${stateFile}):`,
+    '     .completed = true',
+    '     .terminalState = "merged"',
+    '     .currentPhase = 8',
+    '     .currentPhaseStartedAt = null',
+    '     .repos[<repo>].merged = true (each touched repo)',
+    '   Append a final phaseHistory entry { phase: 8, name: "Wrapup and Merge",',
+    '   startedAt: <previous currentPhaseStartedAt>, completedAt: <now> } using a',
+    '   timestamp from `date -u +"%Y-%m-%dT%H:%M:%SZ"`. Do NOT type the timestamp;',
+    '   shell out to date. This single atomic write is the load-bearing finality.',
+    '',
+    '2. Run /wrapup with explicit --main-root so it writes to the primary main',
+    '   checkout (NOT the worktree, which is about to be removed):',
+    `     /wrapup ${id} --main-root ${primary && primary.path ? primary.path : '<primary-path>'}${touched && touched.length > 1 ? ' --touched-repos ' + touchedIds : ''}`,
+    '   If /wrapup surfaces a Salesforce permset blocker or deploy failure, STOP',
+    '   and report. State finalization (step 1) has already landed, so the dashboard',
+    '   correctly shows the REQ as merged regardless. The wrapup blocker is a deploy',
+    '   blocker, not a merge blocker — the user re-runs /wrapup later.',
+    '',
+    '3. Remove every touched-repo worktree using the ABSOLUTE path from state:',
+    ...cleanupLines,
+    '   A worktree-remove failure is NOT fatal — log it and continue. The merge has',
+    '   already landed and the dashboard already shows green; a stuck worktree is',
+    '   recoverable but stopping here would leave the user thinking nothing finished.',
+    '',
+    'Report success/failure of each step. The orchestrator does not re-verify this —',
+    'the dashboard reads the flipped flags directly. If your context is running thin,',
+    'step 1 is the single most important write; do not skip it under any circumstance.',
+  ].join('\n');
 }
 
 // verifyPrStates — the "claim ≠ truth" gh re-verification, run as ONE read-only
@@ -1756,6 +1908,13 @@ async function mergeCrossRepoReq(id, term) {
   // claim ≠ truth — re-verify before upgrading pr-ready → merged (BR-6).
   const verifiedPrs = await verifyPrStates(id, P, prs);
   if (allMerged(verifiedPrs)) {
+    // Run wrapup + worktree cleanup. The barrier doesn't carry the full repos
+    // records, so the leaf re-reads pipeline-state.json itself to find the
+    // touched-repo paths and worktrees.
+    await agent(crossRepoWrapupCleanupPrompt(id), {
+      ...P,
+      label: `${id} merge-barrier-cleanup`,
+    });
     return { state: 'merged', id, prs: stripVerifyMarkers(verifiedPrs) };
   }
   return blocked(id, 'merge-unverified', {
@@ -1764,11 +1923,56 @@ async function mergeCrossRepoReq(id, term) {
   });
 }
 
+// crossRepoWrapupCleanupPrompt — counterpart of wrapupCleanupPrompt for the
+// cross-repo barrier. The barrier has only the REQ id and PR list; the leaf
+// re-reads pipeline-state.json from the primary repo's spec dir to find the
+// touched-repo paths/worktrees, then runs /wrapup, removes every worktree, and
+// flips the terminal flags.
+function crossRepoWrapupCleanupPrompt(id) {
+  return [
+    `Cross-REQ finalize-then-wrapup-then-cleanup for ${id}: every touched-repo PR has`,
+    'merged and been verified. Order is load-bearing: terminal-flag flip FIRST so the',
+    'dashboard goes green the moment we know all merges landed, THEN /wrapup, THEN',
+    'worktree removal across every touched repo.',
+    '',
+    `1. Locate the spec dir for ${id} (search any registered project root for`,
+    `   .adlc/specs/${id}-* with a pipeline-state.json). Read repos and find the`,
+    '   primary record (primary: true) — that gives you the main-checkout path.',
+    '',
+    '2. FIRST: flip pipeline-state.json terminal flags in the PRIMARY MAIN CHECKOUT.',
+    '   This is the load-bearing finality — do this BEFORE running /wrapup so a leaf',
+    '   that dies during step 3 or 4 still leaves the dashboard correctly green:',
+    '     .completed = true',
+    '     .terminalState = "merged"',
+    '     .currentPhase = 8',
+    '     .currentPhaseStartedAt = null',
+    '     .repos[<each-touched-repo>].merged = true',
+    '   Append a final phaseHistory entry { phase: 8, name: "Wrapup (cross-repo)",',
+    '   startedAt: <previous currentPhaseStartedAt>, completedAt: <now> } using',
+    '   `date -u +"%Y-%m-%dT%H:%M:%SZ"` for timestamps. Do NOT type the timestamp.',
+    '',
+    `3. Run /wrapup ${id} --main-root <primary.path> --touched-repos <comma-list>.`,
+    '   If /wrapup surfaces a Salesforce permset blocker or deploy failure, STOP and',
+    '   report. State finalization (step 2) has already landed, so the dashboard',
+    '   correctly shows merged regardless. The wrapup blocker is a deploy blocker, not',
+    '   a merge blocker — user re-runs /wrapup later.',
+    '',
+    '4. For each touched repo, remove its worktree using the absolute path from state:',
+    '   `git -C <repos[<id>].path> worktree remove <repos[<id>].worktree>` (try --force',
+    '   on failure). A worktree-remove failure is NOT fatal — log and continue.',
+    '',
+    'Report success/failure of each step. If your context is running thin, step 2 is',
+    'the single most important write; do not skip it under any circumstance.',
+  ].join('\n');
+}
+
 // crossRepoMergePrompt — instruct the barrier merge agent to merge every PR of a
 // cross-repo REQ (in mergeOrder), from each repo's parent path, writing
-// repos[*].merged after each. Mirrors the single-repo mergePrompt but for the
-// multi-repo case the orchestrator (not Phase 8) owns. The script re-verifies via
-// gh afterward — the claim here is not accepted on its own. (ADR-12, BR-6)
+// repos[*].merged after each. Per-repo actor: hosted (`gh pr merge`) or local-bare
+// (hand-merge into the integration branch + push to the bare origin). The script
+// re-verifies each merge afterward — the claim here is not accepted on its own.
+// NEVER halt a touched repo at `pr-ready` once we are past this barrier; either
+// the merge lands or it is a blocked merge-conflict. (ADR-12, BR-6)
 function crossRepoMergePrompt(id, prs) {
   const prList = (prs || []).map((p) => `${p.repo}: ${p.url}`).join('; ');
   return [
@@ -1778,18 +1982,33 @@ function crossRepoMergePrompt(id, prs) {
     '',
     `PRs to merge (repo: url): ${prList || '(none)'}.`,
     '',
-    'For EACH PR, in a sensible order (dependency/mergeOrder if one is recorded):',
-    '  1. Confirm OPEN + MERGEABLE + CI green',
-    '     (`gh pr view <url> --json state,mergeStateStatus`). On a real MERGE',
-    '     CONFLICT, STOP and report mergeConflict=true — do not force.',
-    '  2. Merge from the repo\'s PARENT path (not the worktree — git refuses to',
-    '     delete a branch checked out by a worktree):',
-    '     `gh pr merge <url> --squash --delete-branch`.',
-    '  3. Immediately set pipeline-state.json.repos[<repo>].merged = true.',
+    'For EACH PR, in dependency order (mergeOrder if one is recorded):',
+    '  1. Probe the actor for THIS repo (different repos may use different actors):',
+    '       ORIGIN_URL=$(git -C <repos[<id>].path> remote get-url origin)',
+    '       case "$ORIGIN_URL" in',
+    '         http://*|https://*|git@*|ssh://*|git://*) IS_LOCAL_BARE=0 ;;',
+    '         file://*|/*|./*|../*) IS_LOCAL_BARE=1 ;;',
+    '       esac',
+    '       case "<url>" in local-bare:*|local-bare-origin:*) IS_LOCAL_BARE=1 ;; esac',
+    '',
+    '  2A. Hosted (IS_LOCAL_BARE=0):',
+    '       - `gh pr view <url> --json state,mergeStateStatus` — OPEN+MERGEABLE',
+    '         required. Real MERGE CONFLICT → STOP, report mergeConflict=true.',
+    '       - `gh pr merge <url> --squash --delete-branch` from the PARENT path.',
+    '',
+    '  2B. Local-bare (IS_LOCAL_BARE=1):',
+    '       - Run all git commands with `git -C <repos[<id>].path>` (parent path).',
+    '       - fetch origin, checkout integration, reset --hard origin/<integration>.',
+    '       - `git merge-tree origin/<integration> origin/<feat>` — if it shows a',
+    '         conflict, STOP and report mergeConflict=true.',
+    '       - `git merge --no-ff origin/<feat> -m "merge: <repo> <REQ-id>"`.',
+    '       - `git push origin <integration> && git push origin --delete <feat> || true`.',
+    '',
+    '  3. Set pipeline-state.json.repos[<repo>].merged = true.',
     '',
     'Report mergeConflict (true ONLY on a real conflict) and merged (true if every',
-    'PR merge command ran without error). The script re-verifies each merge with',
-    '`gh pr view` — your claim is not accepted on its own.',
+    'per-repo merge ran without error). The script re-verifies each merge — your',
+    'claim is not accepted on its own.',
   ].join('\n');
 }
 
