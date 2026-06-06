@@ -138,9 +138,10 @@ Execute these phases in order. Each phase has a validation gate — if validatio
   "startedAt": "2026-03-27T10:00:00Z",
   "completed": false,
   "currentPhase": 0,
+  "currentPhaseStartedAt": "2026-03-27T10:00:00Z",
   "completedPhases": [],
   "phaseHistory": [
-    { "phase": 0, "name": "Create Worktree", "completedAt": "2026-03-27T10:01:00Z" }
+    { "phase": 0, "name": "Create Worktree", "startedAt": "2026-03-27T10:00:00Z", "completedAt": "2026-03-27T10:01:00Z" }
   ],
   "repos": {
     "web": {
@@ -185,9 +186,9 @@ The `snapshotBranch` and `snapshotPR` fields on each `repos.<id>` entry are **de
 
 **Gate Protocol — follow exactly**:
 
-1. **Initialize** the state file at the start of Step 0 with `currentPhase: 0, completedPhases: [], completed: false, repos: {...resolved from config...}, mergeOrder: [...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`
-2. **Before starting any phase**: read `pipeline-state.json`. Verify `currentPhase` equals the phase you're about to start AND the previous phase is in `completedPhases`. If either check fails, **STOP** — you skipped a phase. Go back and complete it.
-3. **After completing any phase**: append the phase number to `completedPhases`, append an entry to `phaseHistory` with the completion timestamp, set `currentPhase` to the next phase number.
+1. **Initialize** the state file at the start of Step 0 with `currentPhase: 0, currentPhaseStartedAt: <now>, completedPhases: [], completed: false, repos: {...resolved from config...}, mergeOrder: [...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`
+2. **Before starting any phase**: read `pipeline-state.json`. Verify `currentPhase` equals the phase you're about to start AND the previous phase is in `completedPhases`. If either check fails, **STOP** — you skipped a phase. Go back and complete it. **Telemetry**: if `currentPhaseStartedAt` is null/missing or if `currentPhase` was just advanced (i.e. you're entering a new phase), set `currentPhaseStartedAt` to the current ISO-8601 timestamp before doing any phase work. Resuming an interrupted phase MUST preserve the existing `currentPhaseStartedAt` (do NOT overwrite — that would erase already-accrued execution time on resume).
+3. **After completing any phase**: append the phase number to `completedPhases`, append an entry to `phaseHistory` with `{phase, name, startedAt: <currentPhaseStartedAt>, completedAt: <now>}`, set `currentPhase` to the next phase number, and set `currentPhaseStartedAt` to the current timestamp (the next phase begins immediately). On the final phase (Phase 8), set `currentPhaseStartedAt` to `null` instead — the pipeline is done.
 4. **Phase 4 task-level writes**: When starting a task, set `phase4.currentTask` to its TASK-xxx ID. When its commit lands (in the task's target-repo worktree), append the ID to `phase4.completedTasks` and clear `currentTask`. On unrecoverable failure surfaced to the user, append to `phase4.failedTasks` instead.
 5. **Worktree paths are immutable post-Step-0**: once Step 0 records `repos[<id>].worktree`, every subsequent phase (1–8) MUST read the path from state and MUST NOT re-derive it from cwd, the REQ id, or any naming convention. This applies on the happy path, not just on resume. (Step 0 itself reads cwd exactly once — at item 2 of Step 0 — to initialize the registry, then freezes the path into state; the prohibition starts from the moment Step 0 completes.)
 5b. **Resume from interruption**: If the state file already exists when you start, read it and resume from `currentPhase`. Trust `repos` as the source of truth for worktree paths. If `currentPhase` is 4 and `phase4.currentTask` is non-null, resume that specific task (re-read its file, use `repos[<task.repo>].worktree` for every git/file operation, re-check whether its commit already landed, continue or restart as appropriate) before moving to the next task in the dependency graph. Never replay tasks already in `completedTasks`.
@@ -267,7 +268,7 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
    - `.adlc/context/project-overview.md`
    - `.adlc/specs/REQ-xxx-*/requirement.md`
    - `.adlc/config.yml` (if present)
-8. **Initialize `pipeline-state.json`** in the primary's spec directory with `currentPhase: 0, completedPhases: [], completed: false, startedAt: <now>, integrationBranch: <integration-branch>, repos: {...resolved registry with absolute paths, worktrees, branches, touched flags...}, mergeOrder: [...from config.yml or declared order, filtered to touched repos...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`. `integrationBranch` is the value resolved in step 4 — Phase 6 (PR base) and Phase 8 (merge target) MUST read it from state, never re-derive or assume `main`. If the file already exists, read it and resume from `currentPhase` (and from `phase4.currentTask` if mid-Phase-4) — do NOT recreate worktrees that already exist.
+8. **Initialize `pipeline-state.json`** in the primary's spec directory with `currentPhase: 0, currentPhaseStartedAt: <now>, completedPhases: [], completed: false, startedAt: <now>, integrationBranch: <integration-branch>, repos: {...resolved registry with absolute paths, worktrees, branches, touched flags...}, mergeOrder: [...from config.yml or declared order, filtered to touched repos...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`. `integrationBranch` is the value resolved in step 4 — Phase 6 (PR base) and Phase 8 (merge target) MUST read it from state, never re-derive or assume `main`. `currentPhaseStartedAt` records when the in-flight phase began so the dashboard can report "Active" execution time accurately (vs. wall-clock `startedAt`). If the file already exists, read it and resume from `currentPhase` (and from `phase4.currentTask` if mid-Phase-4) — do NOT recreate worktrees that already exist, and do NOT overwrite the existing `currentPhaseStartedAt` (preserving it keeps mid-phase telemetry honest across resume).
 9. When the pipeline completes (all PRs merged in Phase 8), clean up every worktree using the absolute path recorded in state — read `repos[<id>].worktree` for each touched repo and pass that value to `git worktree remove`. Do NOT use the relative `.worktrees/REQ-xxx` form here — the contract requires the recorded absolute path:
    ```bash
    git -C <repo-path> worktree remove <repos[<id>].worktree>

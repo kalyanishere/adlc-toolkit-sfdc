@@ -145,6 +145,9 @@ function projectReqState(specDir) {
       lastPhase: null,
       startedAt: null,
       lastActivityAt: null,
+      currentPhaseStartedAt: null,
+      activeMs: 0,
+      hasPhaseTelemetry: false,
       integrationBranch: null,
       repos: {},
       tasks,
@@ -176,6 +179,27 @@ function projectReqState(specDir) {
     .sort()
     .pop() || null;
 
+  // Per-phase telemetry. Modern state files (post-REQ-XXX) record each
+  // phaseHistory entry with both startedAt and completedAt, plus a
+  // top-level currentPhaseStartedAt for the in-flight phase.
+  // The dashboard sums per-phase active spans + the live in-flight span
+  // to report real execution time (which excludes idle gaps between
+  // phases / pickup delays). Legacy entries that lack startedAt
+  // contribute 0 to the sum — they show up only in idle/wall-clock.
+  let activeMs = 0;
+  let hasPhaseTelemetry = false;
+  for (const p of phaseHistory) {
+    if (!p || typeof p.startedAt !== 'string' || typeof p.completedAt !== 'string') continue;
+    const a = Date.parse(p.startedAt);
+    const b = Date.parse(p.completedAt);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) continue;
+    activeMs += (b - a);
+    hasPhaseTelemetry = true;
+  }
+  const currentPhaseStartedAt = typeof state.currentPhaseStartedAt === 'string'
+    ? state.currentPhaseStartedAt
+    : null;
+
   return {
     reqId,
     title,
@@ -190,6 +214,9 @@ function projectReqState(specDir) {
     lastPhase: phaseHistory.length ? phaseHistory[phaseHistory.length - 1] : null,
     startedAt: state.startedAt || null,
     lastActivityAt,
+    currentPhaseStartedAt,
+    activeMs,
+    hasPhaseTelemetry,
     integrationBranch: state.integrationBranch || null,
     repos,
     tasks,

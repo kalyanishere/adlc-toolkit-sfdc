@@ -277,19 +277,42 @@
       ? `<span title="Wall-clock since pipeline first started — startedAt=${escapeHtml(req.startedAt)}">Duration <b>${fmtDuration(req.startedAt)}</b></span>`
       : '';
 
-    // Active: span from pipeline start to most-recent phase completion.
-    // Treats time *between* pipeline runs as part of execution, but stops
-    // counting once the pipeline stalls — so it grows during work and
-    // freezes when nothing's happening.
-    const active = (req.startedAt && req.lastActivityAt && !req.completed)
-      ? `<span title="From pipeline start to most-recent phase completion (${escapeHtml(req.lastActivityAt)}). Stops growing when work pauses.">Active <b>${fmtBetween(req.startedAt, req.lastActivityAt)}</b></span>`
+    // Active: real per-phase execution time when telemetry is available.
+    // Modern state files: sum each completed phase's (completedAt-startedAt)
+    //   + (now - currentPhaseStartedAt) for the in-flight phase.
+    // This excludes idle gaps between phases and pickup delays — it's the
+    // actual time the pipeline was working on this REQ.
+    // Legacy state files: fall back to startedAt → lastActivityAt span (an
+    // upper-bound proxy that includes between-phase idle).
+    let activeStr = '';
+    let activeTitle = '';
+    if (req.hasPhaseTelemetry || req.activeMs > 0 || req.currentPhaseStartedAt) {
+      let ms = Number.isFinite(req.activeMs) ? req.activeMs : 0;
+      // Add in-flight span if a phase is currently running.
+      if (!req.completed && req.currentPhaseStartedAt) {
+        const t = Date.parse(req.currentPhaseStartedAt);
+        if (Number.isFinite(t)) ms += Math.max(0, Date.now() - t);
+      }
+      activeStr = fmtSpan(ms);
+      activeTitle = `Sum of per-phase execution time across phaseHistory${
+        req.currentPhaseStartedAt && !req.completed
+          ? ` + in-flight phase since ${escapeHtml(req.currentPhaseStartedAt)}` : ''
+      }. Excludes idle gaps between phases.`;
+    } else if (req.startedAt && req.lastActivityAt && !req.completed) {
+      activeStr = fmtBetween(req.startedAt, req.lastActivityAt);
+      activeTitle = `Legacy state file — no per-phase telemetry. Approximation: pipeline start → most-recent phase completion (${escapeHtml(req.lastActivityAt)}).`;
+    }
+    const active = activeStr
+      ? `<span title="${activeTitle}">Active <b>${activeStr}</b></span>`
       : '';
 
-    // Idle: how long since the last phase advanced. Grows whenever the
-    // pipeline is paused (post-completion, mid-run pause, or waiting to be
-    // picked up by the next /sprint or /proceed). Hidden when 0.
+    // Last completion: time since most-recent phase finished. Grows during
+    // an in-flight phase (no completion yet) and during any pipeline pause.
+    // Read as "is anything actually completing?" — large value with Active
+    // also climbing = a slow phase; large value with Active flat = a stalled
+    // pipeline.
     const idle = (req.lastActivityAt && !req.completed)
-      ? `<span title="Time since last phase completion (${escapeHtml(req.lastActivityAt)}). High idle = pipeline is paused or waiting for pickup.">Idle <b>${fmtSince(req.lastActivityAt)}</b></span>`
+      ? `<span title="Time since the most-recent phase completion (${escapeHtml(req.lastActivityAt)}). High = current phase is slow or pipeline is stalled.">Last completion <b>${fmtSince(req.lastActivityAt)}</b> ago</span>`
       : '';
 
     const last = req.lastPhase

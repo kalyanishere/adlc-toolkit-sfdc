@@ -115,7 +115,7 @@ In cross-repo mode you will resolve a `<ARTIFACT_ROOT>` per touched repo using t
 2. Set all task statuses to `complete` in `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/tasks/*.md`
 3. Update the `updated` date on all modified artifacts to today's date
 4. If any tasks were deferred or descoped, note them in the requirement file under a "Deferred" section
-5. If `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/pipeline-state.json` exists, update it: set `"completed": true` and add a final entry to `phaseHistory`
+5. If `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/pipeline-state.json` exists, update it: set `"completed": true`, add a final entry to `phaseHistory` with `{phase, name, startedAt: <currentPhaseStartedAt>, completedAt: <now>}`, and clear `currentPhaseStartedAt` (set it to `null`) since no phase is in flight after wrapup
 
 ### Step 3a: Salesforce — Permissions.md gate
 
