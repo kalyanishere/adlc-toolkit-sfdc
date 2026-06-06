@@ -33,6 +33,22 @@
   }
   header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
   header .meta { color: var(--muted); font-size: 12px; }
+  header .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  header .tab {
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+    user-select: none;
+  }
+  header .tab:hover { color: var(--fg); }
+  header .tab.active {
+    background: rgba(96,165,250,0.15); color: var(--running);
+    border-color: rgba(96,165,250,0.45);
+  }
+  header .tab .count {
+    margin-left: 6px; font-size: 10px; color: var(--muted);
+    background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 999px;
+  }
+  header .tab.active .count { color: var(--running); background: rgba(96,165,250,0.10); }
   header .conn { margin-left: auto; font-size: 11px; color: var(--muted); }
   header .conn.live::before {
     content: ""; display: inline-block; width: 7px; height: 7px;
@@ -124,6 +140,7 @@
 <header>
   <h1>ADLC Sprint Dashboard</h1>
   <span class="meta" id="root-path">…</span>
+  <div class="tabs" id="tabs"></div>
   <span class="conn dead" id="conn">connecting</span>
 </header>
 <main id="main">
@@ -133,8 +150,17 @@
   const main = document.getElementById('main');
   const conn = document.getElementById('conn');
   const rootPathEl = document.getElementById('root-path');
+  const tabsEl = document.getElementById('tabs');
 
   const PHASE_DEFAULT = ['0 Worktree','1 Spec','2 Architect','3 Validate','4 Implement','5 Verify','6 PR','7 CI','8 Merge'];
+  const SELECT_KEY = 'adlc-dashboard-selected-project';
+  let selectedProject = (() => {
+    try { return localStorage.getItem(SELECT_KEY) || ''; } catch (_) { return ''; }
+  })();
+  function setSelectedProject(name) {
+    selectedProject = name;
+    try { localStorage.setItem(SELECT_KEY, name); } catch (_) {}
+  }
 
   function fmtDuration(iso) {
     if (!iso) return '';
@@ -237,14 +263,53 @@
     `;
   }
 
-  function render(snap) {
-    rootPathEl.textContent = snap.root;
-    const labels = snap.phaseLabels || PHASE_DEFAULT;
-    if (!snap.reqs || !snap.reqs.length) {
-      main.innerHTML = `<div class="empty">No REQs found under <code>.adlc/specs/</code>.</div>`;
+  function renderTabs(projects) {
+    if (!projects.length) {
+      tabsEl.innerHTML = '';
       return;
     }
-    main.innerHTML = snap.reqs.map((r) => renderReq(r, labels)).join('');
+    tabsEl.innerHTML = projects.map((p) => {
+      const cls = p.name === selectedProject ? 'tab active' : 'tab';
+      return `<span class="${cls}" data-project="${escapeHtml(p.name)}" title="${escapeHtml(p.path)}">${escapeHtml(p.name)}<span class="count">${p.reqs.length}</span></span>`;
+    }).join('');
+    tabsEl.querySelectorAll('.tab').forEach((el) => {
+      el.addEventListener('click', () => {
+        setSelectedProject(el.getAttribute('data-project') || '');
+        if (window.__lastSnap) render(window.__lastSnap);
+      });
+    });
+  }
+
+  function render(snap) {
+    window.__lastSnap = snap;
+    const labels = snap.phaseLabels || PHASE_DEFAULT;
+
+    // Multi-project shape: { projects: [{ name, path, reqs }, ...] }
+    // Legacy single-project shape: { root, reqs } — kept for backward compat.
+    const projects = Array.isArray(snap.projects)
+      ? snap.projects
+      : (snap.reqs ? [{ name: snap.root || '(unknown)', path: snap.root || '', reqs: snap.reqs }] : []);
+
+    if (!projects.length) {
+      rootPathEl.textContent = '';
+      tabsEl.innerHTML = '';
+      main.innerHTML = `<div class="empty">No projects registered. Run <code>/init</code> in a project to register it, or check <code>~/.adlc/dashboard-registry.json</code>.</div>`;
+      return;
+    }
+
+    if (!projects.some((p) => p.name === selectedProject)) {
+      setSelectedProject(projects[0].name);
+    }
+    const active = projects.find((p) => p.name === selectedProject) || projects[0];
+
+    renderTabs(projects);
+    rootPathEl.textContent = active.path || '';
+
+    if (!active.reqs || !active.reqs.length) {
+      main.innerHTML = `<div class="empty">No REQs found in <b>${escapeHtml(active.name)}</b> under <code>.adlc/specs/</code>.</div>`;
+      return;
+    }
+    main.innerHTML = active.reqs.map((r) => renderReq(r, labels)).join('');
   }
 
   function setConn(state, label) {
