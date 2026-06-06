@@ -29,6 +29,35 @@ Always read `salesforce-rules.md` Testing section for the always-on baseline.
 
 ## Salesforce baseline
 
+### Metadata-only carve-out (apply BEFORE any other check)
+
+If the diff contains no Apex (`.cls` / `.trigger`) and no LWC JS with logic, a test class is NOT required and the deploy validates with `--test-level NoTestRun`. This carve-out covers diffs that only touch:
+
+- custom objects (`*.object-meta.xml`) and custom fields (`*.field-meta.xml`)
+- record types, validation rules, picklist value sets, compact layouts, list views
+- permission sets / permission set groups, profiles, sharing rules
+- page layouts, FlexiPages, Lightning App Builder pages, tabs, applications
+- static resources, custom labels, custom metadata types, custom settings
+- Flows with no Apex callout or invocable Apex action
+- reports, dashboards, email templates
+
+When the carve-out applies:
+- DO NOT emit "missing test class" findings.
+- DO NOT emit per-class coverage findings (there are no changed classes).
+- Output a single line in the summary: `Metadata-only diff — test-class requirement waived (NoTestRun).`
+- The org-level coverage gate still applies post-deploy in `/canary` Step 5; do NOT re-check it here.
+
+```bash
+# Carve-out detector
+APEX_TOUCHED=$(git diff --name-only "$BASE...HEAD" | grep -E '\.(cls|trigger)$' || true)
+LWC_LOGIC_TOUCHED=$(git diff --name-only "$BASE...HEAD" | grep -E '/lwc/.+\.js$' | grep -v '\.test\.js$' || true)
+if [ -z "$APEX_TOUCHED" ] && [ -z "$LWC_LOGIC_TOUCHED" ]; then
+  CARVE_OUT=1   # waive test-class requirement
+fi
+```
+
+Once any Apex `.cls` or `.trigger` enters the diff, the carve-out no longer applies — run the full checklist below.
+
 Non-negotiable from salesforce-rules.md Testing section:
 
 - **Coverage policy (REQ-A)** — read `.adlc/config.yml` `salesforce.coverage` block first. Apply the policy below; do NOT hardcode 75/80.

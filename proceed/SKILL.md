@@ -432,6 +432,11 @@ ALIAS=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*validate_org:/{p
 # Resolve --test-level by reusing /canary Step 2b's diff-aware logic. Default to NoTestRun
 # when the diff is metadata-only (saves 5-10 min per validate); RunSpecifiedTests when only
 # a few Apex classes changed; RunLocalTests as a safe fallback.
+#
+# Metadata-only carve-out (per salesforce-rules.md "Unit Testing Requirements"): if the diff
+# only touches custom objects/fields, perm sets, layouts, FlexiPages, Flows-without-Apex,
+# static resources, etc. — i.e. NO `.cls`/`.trigger` files — a test class is NOT required.
+# We run validate with --test-level NoTestRun and reviewers MUST NOT flag missing tests.
 APEX_TOUCHED=$(git diff --name-only "origin/${integrationBranch:-main}...HEAD" | grep -E '\.(cls|trigger)$' | grep -vE '(Test|_Test)\.cls$' || true)
 if [ -z "$APEX_TOUCHED" ]; then TEST_LEVEL="NoTestRun"; else TEST_LEVEL="RunLocalTests"; fi
 
@@ -442,21 +447,46 @@ sf project deploy validate \
   --target-org "$ALIAS" \
   --source-dir "$WORKSPACE" \
   --test-level "$TEST_LEVEL" \
-  --wait 30 \
+  --wait 5 \
   --json
+```
+
+**Wait cap = 5 minutes (hard cap, do not raise).** Each REQ in this pipeline is sized to be a small, isolated change set; a healthy validate against a sandbox should return in well under that. If the validate has not finished when `--wait 5` expires, the `sf` CLI returns a non-terminal "still running" response and the **pipeline must NOT block here** — capture the validation id, mark the gate as `running`, and continue to Phase 6. The validate keeps executing server-side and will be reconciled in Phase 7.
+
+```sh
+# Capture the JSON; --wait 5 will return either a terminal status OR a still-running response.
+VALIDATE_JSON=$(sf project deploy validate \
+  --target-org "$ALIAS" \
+  --source-dir "$WORKSPACE" \
+  --test-level "$TEST_LEVEL" \
+  --wait 5 \
+  --json 2>&1 || true)
+
+VALIDATION_ID=$(echo "$VALIDATE_JSON" | jq -r '.result.id // empty')
+STATUS=$(echo "$VALIDATE_JSON" | jq -r '.result.status // empty')
+
+# If sf timed out the wait, status will be one of: Pending | InProgress | Queued.
+# Treat those as "running" — DO NOT loop and DO NOT halt.
+case "$STATUS" in
+  Succeeded)             OUTCOME="passed" ;;
+  Failed|Canceled)       OUTCOME="failed" ;;
+  Pending|InProgress|Queued|"") OUTCOME="running" ;;
+  *)                     OUTCOME="running" ;;
+esac
 ```
 
 **Outcome handling:**
 
-1. **Clean validate** (status `Succeeded`, `checkOnly=true`, no component failures, no test failures): write `phase5.platformValidate[<repo-id>] = { status: "passed", validationId: <id>, alias: <alias>, testLevel: <level>, runAt: <ts> }` to `pipeline-state.json` and proceed.
-2. **Validation failed** (compile errors, missing component, FLS error, malformed metadata, test failure): treat every failure entry as a **Critical finding** and loop back to Step C with the platform's error report inlined. Up to **2 retries** of the C → D → E cycle. Each retry MUST run all of Steps C → D → E in order — do not skip D between attempts because the platform errors only surfaced in E. After the second failed retry, the failure is legitimate halt #2 (same handling as reflector questions): stop, surface the validation id, the failing components, the test failures, and the verbatim platform error to the user.
-3. **No validation org configured** (`salesforce.validate_org`, `orgs.sandbox`, and `orgs.scratch` all absent): record `phase5.platformValidate[<repo-id>] = { status: "skipped", reason: "no validation org configured" }` in `pipeline-state.json`. Do NOT proceed silently — surface a one-line warning in the Phase 5 end-of-phase log: `WARN: platform validate skipped — configure salesforce.validate_org or orgs.sandbox in .adlc/config.yml to enable Salesforce ground-truth gate.` This is intentional (a hard fail would block local-only projects), but must NEVER be a silent skip.
-4. **No Salesforce metadata in this repo's diff** (the touched paths are all docs/tests/non-SF code): mark `phase5.platformValidate[<repo-id>] = { status: "n/a", reason: "no SF metadata in diff" }` and proceed. This is the only legitimate quiet skip.
-5. **`sf` CLI absent or unauthenticated**: surface a Critical finding immediately — this is a setup gap, not a code problem. Do NOT loop. `phase5.platformValidate[<repo-id>] = { status: "tooling-error", reason: "<error>" }`. The user fixes their environment and reruns `/proceed`.
+1. **Clean validate** (`OUTCOME=passed`: status `Succeeded`, `checkOnly=true`, no component failures, no test failures): write `phase5.platformValidate[<repo-id>] = { status: "passed", validationId: <id>, alias: <alias>, testLevel: <level>, runAt: <ts> }` to `pipeline-state.json` and proceed.
+2. **Validation failed** (`OUTCOME=failed`: compile errors, missing component, FLS error, malformed metadata, test failure): treat every failure entry as a **Critical finding** and loop back to Step C with the platform's error report inlined. Up to **2 retries** of the C → D → E cycle. Each retry MUST run all of Steps C → D → E in order — do not skip D between attempts because the platform errors only surfaced in E. After the second failed retry, the failure is legitimate halt #2 (same handling as reflector questions): stop, surface the validation id, the failing components, the test failures, and the verbatim platform error to the user.
+3. **Validate still running after 5-min cap** (`OUTCOME=running`): write `phase5.platformValidate[<repo-id>] = { status: "running", validationId: <id>, alias: <alias>, testLevel: <level>, startedAt: <ts>, deadline: <ts+30m> }` to `pipeline-state.json`. Emit a one-line WARN: `WARN: platform validate did not return within 5m — id <id> still running on $ALIAS; pipeline continues. Phase 7 will reconcile.` Continue to Phase 6. **Do NOT loop, do NOT halt, do NOT raise --wait.** Phase 7 (PR Cleanup & CI) MUST poll `sf project deploy report --target-org "$ALIAS" --job-id "$VALIDATION_ID" --json` once before merge: if `Succeeded`, flip the gate to `passed`; if `Failed`, treat the failures as blockers on the PR and post them as a comment; if still `InProgress`, surface that on the PR and let CI carry the gate.
+4. **No validation org configured** (`salesforce.validate_org`, `orgs.sandbox`, and `orgs.scratch` all absent): record `phase5.platformValidate[<repo-id>] = { status: "skipped", reason: "no validation org configured" }` in `pipeline-state.json`. Do NOT proceed silently — surface a one-line warning in the Phase 5 end-of-phase log: `WARN: platform validate skipped — configure salesforce.validate_org or orgs.sandbox in .adlc/config.yml to enable Salesforce ground-truth gate.` This is intentional (a hard fail would block local-only projects), but must NEVER be a silent skip.
+5. **No Salesforce metadata in this repo's diff** (the touched paths are all docs/tests/non-SF code): mark `phase5.platformValidate[<repo-id>] = { status: "n/a", reason: "no SF metadata in diff" }` and proceed. This is the only legitimate quiet skip.
+6. **`sf` CLI absent or unauthenticated**: surface a Critical finding immediately — this is a setup gap, not a code problem. Do NOT loop. `phase5.platformValidate[<repo-id>] = { status: "tooling-error", reason: "<error>" }`. The user fixes their environment and reruns `/proceed`.
 
-**Why this gate exists**: every static reviewer (correctness, quality, architecture, test-auditor, security) reasons about source code in isolation. None of them can detect: an `.app-meta.xml` extension that should be `.uibundle-meta.xml`; a UI Bundle that ships without `dist/`; a permset referencing a field that exists only on a feature-flagged Edition; a FlexiPage with an invalid `template` ref; an Apex class compiled against a newer API version than the org supports; an OmniStudio component referencing a missing DataPack. The platform validate is the ground-truth oracle and runs in ~30-90s — cheap relative to the cost of catching these only in Phase 7 CI or post-merge.
+**Why this gate exists**: every static reviewer (correctness, quality, architecture, test-auditor, security) reasons about source code in isolation. None of them can detect: an `.app-meta.xml` extension that should be `.uibundle-meta.xml`; a UI Bundle that ships without `dist/`; a permset referencing a field that exists only on a feature-flagged Edition; a FlexiPage with an invalid `template` ref; an Apex class compiled against a newer API version than the org supports; an OmniStudio component referencing a missing DataPack. The platform validate is the ground-truth oracle. With the 5-minute cap, a healthy small-REQ validate finishes inline; a slow run continues server-side and is reconciled in Phase 7 instead of blocking the agent.
 
-**End-of-phase log**: Emit the combined verify summary across repos — per-repo findings, dedupe count, how many fixed, any deferred — followed by a per-repo `Platform validate: ✓ passed (id <validation-id>) | ⚠ skipped (no org) | ✗ failed (N components, M tests)` line. If reflector surfaced user-facing questions, halt here (legitimate halt #2). If platform validate failed twice, halt here (also legitimate halt #2). Otherwise continue to Phase 6.
+**End-of-phase log**: Emit the combined verify summary across repos — per-repo findings, dedupe count, how many fixed, any deferred — followed by a per-repo `Platform validate: ✓ passed (id <validation-id>) | ⏳ running (id <validation-id>, deferred to Phase 7) | ⚠ skipped (no org) | ✗ failed (N components, M tests)` line. If reflector surfaced user-facing questions, halt here (legitimate halt #2). If platform validate failed twice, halt here (also legitimate halt #2). A `running` outcome is NOT a halt — it continues to Phase 6.
 
 ---
 
@@ -486,6 +516,23 @@ content, verify cross-repo contract consistency, push fixups in the owning
 worktree if needed, wait for `gh pr checks` to go green. End-of-phase log:
 one line per PR, then "All N PRs ready for merge".
 
+**Step 7a — Reconcile deferred platform-validate (per repo with `phase5.platformValidate[<repo>].status == "running"`).** Phase 5's validate uses a 5-min wait cap; long-running validates carry over here. For each such repo:
+
+```sh
+VID=$(jq -r ".repos[\"$REPO\"].phase5.platformValidate.validationId" pipeline-state.json)
+ALIAS=$(jq -r ".repos[\"$REPO\"].phase5.platformValidate.alias" pipeline-state.json)
+
+REPORT=$(sf project deploy report --target-org "$ALIAS" --job-id "$VID" --json 2>&1 || true)
+RSTATUS=$(echo "$REPORT" | jq -r '.result.status // empty')
+```
+
+Outcome handling:
+- `Succeeded` → flip `phase5.platformValidate[<repo>].status` to `passed`. No PR action needed beyond the success line in the per-PR log.
+- `Failed` / `Canceled` → treat as a blocker. Post the failing components + test failures as a PR comment, mark the PR as `blocked`, and halt this repo's promotion. Do NOT auto-loop back to Phase 5; the user decides whether to re-run `/proceed` or fix-forward.
+- Still `InProgress` / `Pending` after a single check → leave the gate as `running`, post a PR comment with the validation id and the `sf project deploy report --job-id <id>` command, and let CI / the next manual check carry it. Do NOT poll in a loop; one read per pass.
+
+This step replaces the Phase 5 "wait until validate finishes" behavior — it's the only place the pipeline reconciles a deferred validate. Skip the step entirely when no repo has a deferred validate.
+
 ---
 
 ### Phase 8: Wrapup
@@ -497,6 +544,19 @@ capture), tear down each touched-repo worktree via the absolute path in
 state, set `completed: true`. Terminal claim MUST be tagged exactly one of
 `{merged, pr-ready, blocked, failed}` — untagged claims are a protocol
 violation `/sprint` rejects. Merge conflicts are legitimate halt #3.
+
+**Local-bare / no-`gh` fallback**: when a touched repo's `origin` is a local
+bare directory (or `gh` is unavailable / unauthenticated against a non-hosted
+remote), the pipeline MUST hand-merge the feature branch into
+`integrationBranch` itself rather than stopping at `pr-ready`. The full
+detection probe and merge block live in
+[phases-6-8-ship.md](phases-6-8-ship.md). Once the local merge lands,
+`completed: true` and `terminalState: merged` MUST be written before exit —
+a local-bare run is NEVER allowed to terminate as `pr-ready`. (KYC-REQ-001
+hit this and stalled every dependent REQ until a human noticed; the
+fallback closes the loop.) An `pr-ready` claim is reserved for hosted
+remotes where an orchestrator (e.g. `/sprint`) explicitly owns merge
+sequencing.
 
 ---
 

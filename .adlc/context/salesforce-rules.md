@@ -160,6 +160,16 @@ You are a highly experienced and certified Salesforce Architect with 20+ years o
 - Skills MUST read the policy from config — never hardcode 75/80.
 - Greenfield mode: org-level coverage is the only deploy gate. Per-class coverage on changed classes is reported as informational, not blocking.
 - Brownfield mode: both org-level (≥`org_target`) AND per-changed-class (≥`class_floor`) gates apply. A deploy is blocked if either floor is breached.
+- **Metadata-only carve-out (no test class required)**: when the diff contains *no* Apex (`.cls` / `.trigger`) and *no* LWC JS with logic, a test class is NOT required and `sf project deploy validate` MUST run with `--test-level NoTestRun`. This explicitly covers diffs that only create or modify:
+  - custom objects (`*.object-meta.xml`) and custom fields (`*.field-meta.xml`)
+  - record types, validation rules, picklist value sets, compact layouts, list views
+  - permission sets / permission set groups, profiles, sharing rules
+  - page layouts, FlexiPages, Lightning App Builder pages, tabs, applications
+  - static resources, custom labels, custom metadata types, custom settings
+  - Flows that contain no Apex callout or invocable Apex action
+  - reports, dashboards, email templates
+  Reviewers (test-auditor, correctness, quality) MUST NOT raise a "missing test class" finding for object-only or other metadata-only diffs. The org-level coverage gate still applies post-deploy in `/canary` Step 5, but adding a test class for a brand-new `.object-meta.xml` is busy-work — there is no Apex code path to exercise.
+- Once an Apex `.cls` or `.trigger` enters the diff, the carve-out no longer applies for that change set: the standard paired-test-class + coverage gates kick back in.
 - Write meaningful test assertions, not just coverage
 - Use `Test.startTest()` and `Test.stopTest()` appropriately
 - Create test data using `@TestSetup` methods when possible
