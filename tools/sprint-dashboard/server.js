@@ -144,6 +144,7 @@ function projectReqState(specDir) {
       completedPhases: [],
       lastPhase: null,
       startedAt: null,
+      lastActivityAt: null,
       integrationBranch: null,
       repos: {},
       tasks,
@@ -164,6 +165,17 @@ function projectReqState(specDir) {
     }
   }
 
+  const phaseHistory = Array.isArray(state.phaseHistory) ? state.phaseHistory : [];
+  // Latest `completedAt` across phaseHistory — proxy for "when did this spec
+  // last advance?". Used by the dashboard to surface pickup-delay/idle vs
+  // active execution time. We sort lexicographically because every value
+  // is an ISO-8601 string (UTC), so lex order == chronological order.
+  const lastActivityAt = phaseHistory
+    .map((p) => (p && typeof p.completedAt === 'string') ? p.completedAt : null)
+    .filter(Boolean)
+    .sort()
+    .pop() || null;
+
   return {
     reqId,
     title,
@@ -175,10 +187,9 @@ function projectReqState(specDir) {
     failedTasks: Array.isArray(state.phase4?.failedTasks) ? state.phase4.failedTasks : [],
     completedTasks: Array.isArray(state.phase4?.completedTasks) ? state.phase4.completedTasks : [],
     completedPhases: Array.isArray(state.completedPhases) ? state.completedPhases : [],
-    lastPhase: Array.isArray(state.phaseHistory) && state.phaseHistory.length
-      ? state.phaseHistory[state.phaseHistory.length - 1]
-      : null,
+    lastPhase: phaseHistory.length ? phaseHistory[phaseHistory.length - 1] : null,
     startedAt: state.startedAt || null,
+    lastActivityAt,
     integrationBranch: state.integrationBranch || null,
     repos,
     tasks,

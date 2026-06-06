@@ -171,15 +171,34 @@
     try { localStorage.setItem(SELECT_KEY, name); } catch (_) {}
   }
 
+  function fmtSpan(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return '<1m';
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    if (h < 24) return rem ? `${h}h ${rem}m` : `${h}h`;
+    const d = Math.floor(h / 24);
+    const hRem = h % 24;
+    return hRem ? `${d}d ${hRem}h` : `${d}d`;
+  }
+
   function fmtDuration(iso) {
     if (!iso) return '';
     const start = new Date(iso).getTime();
     if (Number.isNaN(start)) return '';
-    const ms = Date.now() - start;
-    const m = Math.floor(ms / 60000);
-    if (m < 60) return m + 'm';
-    const h = Math.floor(m / 60);
-    return h + 'h ' + (m % 60) + 'm';
+    return fmtSpan(Date.now() - start);
+  }
+
+  function fmtSince(iso) { return fmtDuration(iso); }
+
+  function fmtBetween(startIso, endIso) {
+    if (!startIso || !endIso) return '';
+    const a = new Date(startIso).getTime();
+    const b = new Date(endIso).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b)) return '';
+    return fmtSpan(b - a);
   }
 
   function statePill(req) {
@@ -250,8 +269,32 @@
     const phaseLine = req.hasState
       ? `Phase <b>${escapeHtml(req.currentPhase ?? '?')}</b> / 8`
       : `<span style="color:var(--muted)">Spec only — pipeline not started</span>`;
-    const dur = req.startedAt ? `<span>Duration <b>${fmtDuration(req.startedAt)}</b></span>` : '';
-    const last = req.lastPhase ? `<span>Last <b>${escapeHtml(typeof req.lastPhase === 'string' ? req.lastPhase : (req.lastPhase.phase ?? JSON.stringify(req.lastPhase)))}</b></span>` : '';
+
+    // Duration: total wall-clock since pipeline first ran on this spec
+    // (state.startedAt — set at Phase 0). Includes any idle gaps between
+    // phases or pickup delays after the pipeline paused.
+    const dur = req.startedAt
+      ? `<span title="Wall-clock since pipeline first started — startedAt=${escapeHtml(req.startedAt)}">Duration <b>${fmtDuration(req.startedAt)}</b></span>`
+      : '';
+
+    // Active: span from pipeline start to most-recent phase completion.
+    // Treats time *between* pipeline runs as part of execution, but stops
+    // counting once the pipeline stalls — so it grows during work and
+    // freezes when nothing's happening.
+    const active = (req.startedAt && req.lastActivityAt && !req.completed)
+      ? `<span title="From pipeline start to most-recent phase completion (${escapeHtml(req.lastActivityAt)}). Stops growing when work pauses.">Active <b>${fmtBetween(req.startedAt, req.lastActivityAt)}</b></span>`
+      : '';
+
+    // Idle: how long since the last phase advanced. Grows whenever the
+    // pipeline is paused (post-completion, mid-run pause, or waiting to be
+    // picked up by the next /sprint or /proceed). Hidden when 0.
+    const idle = (req.lastActivityAt && !req.completed)
+      ? `<span title="Time since last phase completion (${escapeHtml(req.lastActivityAt)}). High idle = pipeline is paused or waiting for pickup.">Idle <b>${fmtSince(req.lastActivityAt)}</b></span>`
+      : '';
+
+    const last = req.lastPhase
+      ? `<span>Last <b>${escapeHtml(typeof req.lastPhase === 'string' ? req.lastPhase : (req.lastPhase.phase ?? JSON.stringify(req.lastPhase)))}</b></span>`
+      : '';
     const branch = req.integrationBranch ? `<span>Base <b>${escapeHtml(req.integrationBranch)}</b></span>` : '';
     const taskLine = req.currentTask ? `<span>Task <b>${escapeHtml(req.currentTask)}</b></span>` : '';
     return `
@@ -263,7 +306,7 @@
         </div>
         <div class="req-body">
           ${renderPhases(req, labels)}
-          <div class="meta-row">${phaseLine}${taskLine ? '' : ''}${dur}${last}${branch}${taskLine}</div>
+          <div class="meta-row">${phaseLine}${dur}${active}${idle}${last}${branch}${taskLine}</div>
           ${renderRepos(req)}
           ${renderTasks(req)}
           ${renderBlockers(req)}
