@@ -49,7 +49,19 @@
   }
   header .project-picker select:hover { border-color: rgba(96,165,250,0.45); color: var(--fg); }
   header .project-picker select:focus { border-color: rgba(96,165,250,0.60); }
+  header .refresh {
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px;
+    cursor: pointer; user-select: none;
+  }
+  header .refresh:hover { color: var(--fg); border-color: rgba(96,165,250,0.45); }
+  header .refresh:active { background: var(--bg); }
+  header .refresh:disabled { opacity: 0.5; cursor: progress; }
+  header .refresh .spin { display: inline-block; transform-origin: center; }
+  header .refresh.loading .spin { animation: spin 0.8s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   header .conn { margin-left: auto; font-size: 11px; color: var(--muted); }
+  header .meta-right { font-size: 11px; color: var(--muted); }
   header .conn.live::before {
     content: ""; display: inline-block; width: 7px; height: 7px;
     border-radius: 50%; background: var(--ok); margin-right: 6px;
@@ -144,6 +156,10 @@
     <select id="project-select"></select>
   </div>
   <span class="meta" id="root-path">…</span>
+  <button class="refresh" id="refresh" type="button" title="Force refresh from /api/state. Auto-refresh runs every ~1.5s via SSE.">
+    <span class="spin">⟳</span> Refresh
+  </button>
+  <span class="meta-right" id="last-updated"></span>
   <span class="conn dead" id="conn">connecting</span>
 </header>
 <main id="main">
@@ -155,10 +171,46 @@
   const rootPathEl = document.getElementById('root-path');
   const pickerEl = document.getElementById('picker');
   const selectEl = document.getElementById('project-select');
+  const refreshBtn = document.getElementById('refresh');
+  const lastUpdatedEl = document.getElementById('last-updated');
 
   selectEl.addEventListener('change', (e) => {
     setSelectedProject(e.target.value || '');
     if (window.__lastSnap) render(window.__lastSnap);
+  });
+
+  function fmtClock(d) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  async function refreshNow() {
+    if (refreshBtn.disabled) return;
+    refreshBtn.disabled = true;
+    refreshBtn.classList.add('loading');
+    try {
+      const res = await fetch('/api/state', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const snap = await res.json();
+      render(snap);
+    } catch (_) {
+      setConn('dead', 'fetch failed');
+    } finally {
+      refreshBtn.classList.remove('loading');
+      refreshBtn.disabled = false;
+    }
+  }
+  refreshBtn.addEventListener('click', refreshNow);
+
+  // Manual keyboard shortcut: 'r' triggers a refresh (ignored when typing in
+  // an input or pressing a modifier — Cmd/Ctrl+R is the browser reload).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'r' && e.key !== 'R') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    e.preventDefault();
+    refreshNow();
   });
 
   const PHASE_DEFAULT = ['0 Worktree','1 Spec','2 Architect','3 Validate','4 Implement','5 Verify','6 PR','7 CI','8 Merge'];
@@ -355,6 +407,7 @@
 
   function render(snap) {
     window.__lastSnap = snap;
+    lastUpdatedEl.textContent = `updated ${fmtClock(new Date())}`;
     const labels = snap.phaseLabels || PHASE_DEFAULT;
 
     // Multi-project shape: { projects: [{ name, path, reqs }, ...] }
