@@ -1,18 +1,32 @@
 ---
 name: generating-custom-object
-description: "Use this skill when users need to create, generate, or validate Salesforce Custom Object metadata. Trigger when users mention custom objects, creating objects, object metadata, .object files, sharing models, name fields, or validation rules on objects. Also use when users say things like \"create a custom object\", \"generate object metadata\", \"set up an object for...\", or when they're troubleshooting object deployment errors especially around sharing models and Master-Detail relationships. Always use this skill for any custom object metadata work."
+description: "Use this skill ONLY to generate the Custom Object metadata file (`.object-meta.xml`) — label, sharing model, nameField, deployment status, search/report/activity flags. Trigger when users say \"create a custom object\", \"generate object metadata\", \"set up an object for...\", or are troubleshooting object deployment errors around sharing models and Master-Detail relationships. Do NOT use this skill for custom fields, validation rules, list views, tabs, page layouts, action overrides, permission sets, or any other artifact that lives in its own metadata file — those have dedicated skills (see Out of Scope below)."
 metadata:
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## When to Use This Skill
 
 Use this skill when you need to:
-- Create new custom objects
-- Generate custom object metadata XML
-- Configure object sharing and security settings
-- Set up object features and capabilities
-- Troubleshoot deployment errors related to custom objects
+- Create a new custom object's `.object-meta.xml` file
+- Configure object sharing model, name field, and built-in feature flags (search/reports/activities/history)
+- Troubleshoot deployment errors specifically about the object metadata file itself (sharing model vs Master-Detail, reserved API names, missing `<deploymentStatus>`, stray `<fullName>` at root)
+
+## Out of Scope — Use a Different Skill
+
+This skill creates the **object only**. Every related artifact below ships in its own metadata file (SFDX source format) and has its own skill or its own REQ. Do not bundle these into a "create object" task — they each warrant a separate REQ if they aren't already in scope, or they can be added later via Setup.
+
+| Artifact | Skill |
+|---|---|
+| Custom Fields (`.field-meta.xml`) | `generating-custom-field` |
+| Validation Rules (`.validationRule-meta.xml`) | `generating-validation-rule` |
+| List Views (`.listView-meta.xml`) | `generating-list-view` |
+| Custom Tabs (`.tab-meta.xml`) | `generating-custom-tab` |
+| FlexiPages / Page Layouts | `generating-flexipage` |
+| Permission Sets | `generating-permission-set` |
+| Action overrides, compact layouts, search layouts, record types | Out of scope for the ADLC toolkit — configure in Setup, or file a follow-up REQ if metadata-as-code is required |
+
+If the requirement asks for "create a Vehicle object with a tab, a page layout, and an admin permission set", that's three or four REQs (or one REQ with explicit scope across multiple skills) — not a single object generation. Surface this back to the user / `/architect` rather than silently expanding scope.
 
 ## Specification
 
@@ -167,45 +181,14 @@ Do NOT include the `<fullName>` tag at the root of the `.object-meta.xml` file. 
 </CustomObject>
 ```
 
-### Validation Rule Naming Convention
-
-Validation rule names follow different conventions than custom fields.
-
-**Rules:**
-- Must contain only alphanumeric characters and underscores
-- Must begin with a letter
-- Cannot end with an underscore
-- Cannot contain two consecutive underscores
-- **Must NOT end with `__c`** (unlike custom fields)
-
-**❌ INCORRECT:**
-```xml
-<validationRules>
-  <fullName>Require_Start_Date__c</fullName>  <!-- WRONG: Has __c suffix -->
-  <active>true</active>
-  <errorMessage>Start Date is required.</errorMessage>
-  <formula>ISBLANK(Start_Date__c)</formula>
-</validationRules>
-```
-**Error:** `The validation name can only contain alphanumeric characters, must begin with a letter, cannot end with an underscore...`
-
-**✅ CORRECT:**
-```xml
-<validationRules>
-  <fullName>Require_Start_Date</fullName>  <!-- CORRECT: No __c suffix -->
-  <active>true</active>
-  <errorMessage>Start Date is required.</errorMessage>
-  <formula>ISBLANK(Start_Date__c)</formula>
-</validationRules>
-```
-
-**Naming Pattern Reference:**
+### Naming Pattern Reference
 
 | Metadata Type | Naming Pattern | Example |
 |---------------|----------------|---------|
-| Custom Fields | Ends with `__c` | `Start_Date__c` |
-| Validation Rules | No suffix | `Require_Start_Date` |
 | Custom Objects | Ends with `__c` | `Vehicle__c` |
+| Custom Fields  | Ends with `__c` | `Start_Date__c` |
+
+(Validation rules, list views, tabs, etc. follow their own naming conventions — see their dedicated skills.)
 
 ---
 
@@ -230,11 +213,10 @@ Before generating the Custom Object XML, verify:
 - [ ] Are there 2 or fewer Master-Detail relationships?
 - [ ] Is `<fullName>` absent from the XML root?
 
-### Validation Rule Checks (if applicable)
-- [ ] Do validation rule names NOT end with `__c`?
-- [ ] Do validation rule names follow alphanumeric + underscore pattern?
-
 ### Architectural Checks
 - [ ] Is `<description>` present with a meaningful summary?
 - [ ] Are `<enableSearch>` and `<enableReports>` set to `true` if user-facing?
 - [ ] Does the filename match the intended API name?
+
+### Scope Check
+- [ ] Did this skill produce ONLY the `.object-meta.xml` file (no inline fields, validation rules, list views, tabs, layouts, action overrides)? Anything else belongs in its own file generated by its own skill, or a separate REQ.

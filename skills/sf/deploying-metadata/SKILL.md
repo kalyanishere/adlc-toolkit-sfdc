@@ -39,13 +39,57 @@ Delegate elsewhere when the user is:
 ### Default deployment order
 | Phase | Metadata |
 |---|---|
-| 1 | Custom objects / fields |
-| 2 | Permission sets |
-| 3 | Apex |
-| 4 | Flows as Draft |
-| 5 | Flow activation / post-verify |
+| 1 | Custom objects / fields (includes `*__mdt` type definitions) |
+| 2 | Custom Metadata records (rows of `*__mdt` types) |
+| 3 | Permission sets |
+| 4 | Apex |
+| 5 | Flows as Draft |
+| 6 | Flow activation / post-verify |
 
-This ordering prevents many dependency and FLS failures.
+This ordering prevents many dependency and FLS failures. Custom Metadata records (`CustomMetadata` type) **must deploy after** their type definition (`CustomObject` type, member ending in `__mdt`) — they are separate Metadata API types and belong in **separate `<types>` blocks** in `package.xml`.
+
+---
+
+### Custom Metadata Types — package.xml structure (Critical)
+
+**Custom Metadata Types** ship as **two distinct Metadata API types** that must each have their own `<types>` block. Never nest the records inside the type definition's block.
+
+| Concept | Metadata API type | Member format | File |
+|---|---|---|---|
+| **Type definition** ("table") | `CustomObject` | `Tier_Rule__mdt` (with `__mdt`) | `objects/Tier_Rule__mdt/Tier_Rule__mdt.object-meta.xml` |
+| **Records** ("rows") | `CustomMetadata` | `Tier_Rule.Gold` (no `__mdt`) | `customMetadata/Tier_Rule.Gold.md-meta.xml` |
+
+**✅ CORRECT** — separate `<types>` blocks:
+```xml
+<types>
+    <members>Tier_Rule__mdt</members>
+    <name>CustomObject</name>
+</types>
+<types>
+    <members>Tier_Rule.Gold</members>
+    <members>Tier_Rule.Silver</members>
+    <name>CustomMetadata</name>
+</types>
+```
+
+**❌ INCORRECT** — nesting records inside the CustomObject block (will not deploy the records):
+```xml
+<types>
+    <members>Tier_Rule__mdt</members>
+    <members>Tier_Rule.Gold</members>     <!-- WRONG: not a CustomObject member -->
+    <name>CustomObject</name>
+</types>
+```
+
+**❌ INCORRECT** — using `*__mdt` suffix in the CustomMetadata block:
+```xml
+<types>
+    <members>Tier_Rule__mdt.Gold</members>  <!-- WRONG: drop the __mdt -->
+    <name>CustomMetadata</name>
+</types>
+```
+
+When generating `package.xml` for a deploy that includes Custom Metadata Types, always emit two blocks. See `assets/package.xml` for the canonical commented template.
 
 ---
 
@@ -125,6 +169,7 @@ Output template: [references/deployment-report-template.md](references/deploymen
 | tests fail during deploy | broken code or fragile tests | run targeted tests, fix root cause, revalidate |
 | field/object not found in permset | wrong order | deploy objects/fields before permission sets |
 | Flow invalid / version conflict | dependency or activation problem | deploy as Draft, verify, then activate |
+| Custom Metadata records not deployed (or `Cannot find CustomObject member 'Foo.Bar'`) | records nested inside the `CustomObject` `<types>` block, or `__mdt` left on the member name | split into a separate `<types><name>CustomMetadata</name></types>` block; member format is `<TypeApiName>.<RecordDeveloperName>` (no `__mdt`) |
 
 Full workflows: [references/orchestration.md](references/orchestration.md), [references/trigger-deployment-safety.md](references/trigger-deployment-safety.md)
 

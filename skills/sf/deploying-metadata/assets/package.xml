@@ -24,12 +24,14 @@
         <name>LightningComponentBundle</name>
     </types>
 
-    <!-- Custom Objects -->
+    <!-- Custom Objects (includes Custom Metadata Type definitions: *__mdt) -->
     <types>
         <members>Account</members>
         <members>Contact</members>
         <members>Opportunity</members>
         <!-- <members>CustomObject__c</members> -->
+        <!-- Custom Metadata Type DEFINITION goes here (the "table"), e.g.: -->
+        <!-- <members>Tier_Rule__mdt</members> -->
         <name>CustomObject</name>
     </types>
 
@@ -38,6 +40,21 @@
     <types>
         <members>Account.CustomField__c</members>
         <name>CustomField</name>
+    </types>
+    -->
+
+    <!--
+      Custom Metadata RECORDS (rows of a *__mdt type).
+      MUST be a SEPARATE <types> block from CustomObject — never nested.
+      Member format: <TypeApiName>.<RecordDeveloperName>  (no __mdt suffix on the type name).
+      File location:  force-app/main/default/customMetadata/<TypeApiName>.<RecordDeveloperName>.md-meta.xml
+    -->
+    <!--
+    <types>
+        <members>Tier_Rule.Gold</members>
+        <members>Tier_Rule.Silver</members>
+        <members>Tier_Rule.Bronze</members>
+        <name>CustomMetadata</name>
     </types>
     -->
 
