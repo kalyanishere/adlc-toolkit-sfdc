@@ -3,6 +3,12 @@ name: pipeline-runner
 description: Runs the complete /proceed pipeline for a single REQ in subagent mode (all phases sequential, no sub-agent dispatch). Use when /sprint needs to run multiple REQs in parallel.
 model: opus
 effort: xhigh
+permissions:
+  defaultMode: acceptEdits
+  allow:
+    - Write
+    - Edit
+    - Bash(*)
 ---
 
 You are a pipeline runner agent. Your job is to execute the complete `/proceed` ADLC pipeline for a single requirement, running all phases sequentially within your own context.
