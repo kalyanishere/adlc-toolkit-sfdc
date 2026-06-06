@@ -46,9 +46,18 @@ open_in_browser() {
   esac
 }
 
+# Skip registering the toolkit repo itself — it's the development surface
+# (also symlinked at ~/.claude/skills), not a "project" that hosts REQs.
+# The check: a project repo never contains tools/sprint-dashboard/launch.sh,
+# but the toolkit always does. Honor explicit override via ADLC_FORCE_REGISTER=1.
+SKIP_REGISTER=0
+if [ "${ADLC_FORCE_REGISTER:-0}" != "1" ] && [ -f "$REPO_ROOT/tools/sprint-dashboard/launch.sh" ]; then
+  SKIP_REGISTER=1
+fi
+
 # Upsert this repo into the dashboard registry. Done before any early-exit
 # so an already-running server still picks up new projects.
-if command -v node >/dev/null 2>&1; then
+if [ "$SKIP_REGISTER" = "0" ] && command -v node >/dev/null 2>&1; then
   REPO_ROOT="$REPO_ROOT" REGISTRY_FILE="$REGISTRY_FILE" node -e '
     const fs = require("fs");
     const path = require("path");

@@ -33,22 +33,22 @@
   }
   header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
   header .meta { color: var(--muted); font-size: 12px; }
-  header .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-  header .tab {
-    padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
-    background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
-    user-select: none;
+  header .project-picker { display: flex; align-items: center; gap: 6px; }
+  header .project-picker label { color: var(--muted); font-size: 11px; }
+  header .project-picker select {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 26px 4px 10px; font-size: 12px;
+    font: inherit; font-size: 12px;
+    cursor: pointer; outline: none; min-width: 180px;
+    appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
   }
-  header .tab:hover { color: var(--fg); }
-  header .tab.active {
-    background: rgba(96,165,250,0.15); color: var(--running);
-    border-color: rgba(96,165,250,0.45);
-  }
-  header .tab .count {
-    margin-left: 6px; font-size: 10px; color: var(--muted);
-    background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 999px;
-  }
-  header .tab.active .count { color: var(--running); background: rgba(96,165,250,0.10); }
+  header .project-picker select:hover { border-color: rgba(96,165,250,0.45); color: var(--fg); }
+  header .project-picker select:focus { border-color: rgba(96,165,250,0.60); }
   header .conn { margin-left: auto; font-size: 11px; color: var(--muted); }
   header .conn.live::before {
     content: ""; display: inline-block; width: 7px; height: 7px;
@@ -139,8 +139,11 @@
 <body>
 <header>
   <h1>ADLC Sprint Dashboard</h1>
+  <div class="project-picker" id="picker" hidden>
+    <label for="project-select">Project</label>
+    <select id="project-select"></select>
+  </div>
   <span class="meta" id="root-path">…</span>
-  <div class="tabs" id="tabs"></div>
   <span class="conn dead" id="conn">connecting</span>
 </header>
 <main id="main">
@@ -150,7 +153,13 @@
   const main = document.getElementById('main');
   const conn = document.getElementById('conn');
   const rootPathEl = document.getElementById('root-path');
-  const tabsEl = document.getElementById('tabs');
+  const pickerEl = document.getElementById('picker');
+  const selectEl = document.getElementById('project-select');
+
+  selectEl.addEventListener('change', (e) => {
+    setSelectedProject(e.target.value || '');
+    if (window.__lastSnap) render(window.__lastSnap);
+  });
 
   const PHASE_DEFAULT = ['0 Worktree','1 Spec','2 Architect','3 Validate','4 Implement','5 Verify','6 PR','7 CI','8 Merge'];
   const SELECT_KEY = 'adlc-dashboard-selected-project';
@@ -263,21 +272,19 @@
     `;
   }
 
-  function renderTabs(projects) {
+  function renderProjectPicker(projects, activeName) {
     if (!projects.length) {
-      tabsEl.innerHTML = '';
+      pickerEl.hidden = true;
+      selectEl.innerHTML = '';
       return;
     }
-    tabsEl.innerHTML = projects.map((p) => {
-      const cls = p.name === selectedProject ? 'tab active' : 'tab';
-      return `<span class="${cls}" data-project="${escapeHtml(p.name)}" title="${escapeHtml(p.path)}">${escapeHtml(p.name)}<span class="count">${p.reqs.length}</span></span>`;
+    pickerEl.hidden = false;
+    selectEl.innerHTML = projects.map((p) => {
+      const sel = p.name === activeName ? ' selected' : '';
+      const label = `${p.name} (${p.reqs.length})`;
+      return `<option value="${escapeHtml(p.name)}" title="${escapeHtml(p.path)}"${sel}>${escapeHtml(label)}</option>`;
     }).join('');
-    tabsEl.querySelectorAll('.tab').forEach((el) => {
-      el.addEventListener('click', () => {
-        setSelectedProject(el.getAttribute('data-project') || '');
-        if (window.__lastSnap) render(window.__lastSnap);
-      });
-    });
+    selectEl.value = activeName;
   }
 
   function render(snap) {
@@ -292,7 +299,8 @@
 
     if (!projects.length) {
       rootPathEl.textContent = '';
-      tabsEl.innerHTML = '';
+      pickerEl.hidden = true;
+      selectEl.innerHTML = '';
       main.innerHTML = `<div class="empty">No projects registered. Run <code>/init</code> in a project to register it, or check <code>~/.adlc/dashboard-registry.json</code>.</div>`;
       return;
     }
@@ -302,7 +310,7 @@
     }
     const active = projects.find((p) => p.name === selectedProject) || projects[0];
 
-    renderTabs(projects);
+    renderProjectPicker(projects, active.name);
     rootPathEl.textContent = active.path || '';
 
     if (!active.reqs || !active.reqs.length) {
