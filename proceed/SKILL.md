@@ -222,9 +222,9 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
 
 ---
 
-### Step 0: Resolve Repos + Create Worktrees + Preflight + Load Shared Context (ALWAYS FIRST)
+### Step 0: Preflight + Registry + Pre-Validation State File + Load Shared Context (ALWAYS FIRST)
 
-**Before doing anything else**, resolve the repository set, isolate each touched repo in a git worktree, and prime the shared context so subskills don't re-read the same files:
+**Before doing anything else**, resolve the repository set, write a *pre-worktree* state file so the sprint dashboard sees the pipeline immediately, and prime the shared context. **Worktree creation is deferred until after Phase 1 (Validate Spec)** so a failed validation does not leave a stray worktree behind. See "Step 1.5: Create Worktrees After Validation" below for the worktree creation step.
 
 1. **Preflight** — verify all prerequisite files exist in the **primary** repo (stop with a clear message if any are missing):
    - `.adlc/context/project-overview.md` — run `/init` if missing
@@ -236,7 +236,7 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
    - In cross-repo mode: the primary entry's `path` is cwd. Resolve each sibling's `path` to an absolute path (relative paths are relative to the primary repo root). Verify each path exists and is a git repo (`git -C <path> rev-parse --git-dir`). If any sibling is missing, stop with a clear error listing the missing repos.
 3. **Determine touched repos** (best-effort at Step 0; confirmed after Phase 2):
    - If tasks already exist under `.adlc/specs/REQ-xxx-*/tasks/`, read each task's `repo:` field to compute the touched set.
-   - If tasks don't exist yet (fresh pipeline), assume every configured repo is potentially touched and create worktrees in all of them. Post-Phase-2, untouched repos will be marked `touched: false` and their worktrees removed.
+   - If tasks don't exist yet (fresh pipeline), assume every configured repo is potentially touched. Worktrees are NOT created here — that happens in Step 1.5 after validation passes. Post-Phase-2, untouched repos will be marked `touched: false`.
    - The primary is always touched (even if no primary tasks — it hosts the spec and state file).
 4. **Determine the integration branch, then fetch it in each touched repo.** The base for feature branches is NOT always `main` (LESSON-036 — sprinted runners that hardcoded `main` in a staging-first repo paid a mid-pipeline rebase + PR-retarget every time). Detect the repo's branch model; **any one** signal is sufficient:
    - `.adlc/config.yml` declares a `gcp.staging_project` (or otherwise indicates a staging-first deploy), OR
@@ -247,21 +247,53 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
    ```bash
    git -C <repo-path> fetch origin
    ```
-   Do NOT `git checkout <integration-branch>` in `<repo-path>` — it may be checked out in another worktree and fail. The worktree (step 5) is created directly from `origin/<integration-branch>`. Feature branches and the Phase 6 PR base MUST use `<integration-branch>`, never a hardcoded `main`.
-4a. **Parse the declared worktree path (primary repo only)** — scan the launch prompt for the dispatch-line contract. The format is normative in `REQ-263 architecture.md` ("The dispatch-line contract" section); do not change the regex or format here without updating that document.
+   Do NOT `git checkout <integration-branch>` in `<repo-path>` — it may be checked out in another worktree and fail. Feature branches and the Phase 6 PR base MUST use `<integration-branch>`, never a hardcoded `main`. The worktree (Step 1.5) is created directly from `origin/<integration-branch>`.
+
+5a. **Initialize `pipeline-state.json` in the primary repo's MAIN CHECKOUT** at `<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json` with `currentPhase: 0, currentPhaseStartedAt: <now>, completedPhases: [], completed: false, startedAt: <now>, integrationBranch: <integration-branch>, repos: {...resolved registry, paths/branches set, worktree: null for each repo since worktrees do not yet exist...}, mergeOrder: [...from config.yml or declared order, filtered to touched repos...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`. **Pre-worktree state file**: this initial write goes to the main checkout, NOT a worktree, because worktrees are created later (Step 1.5). The sprint dashboard's worktree-aware scan picks up this main-checkout file within ~1.5s, so Phase 0 and Phase 1 are visible the moment `/proceed` starts. Step 1.5 will move this file into the worktree once one exists.
+
+   `integrationBranch` is the value resolved in step 4. `currentPhaseStartedAt` records when the in-flight phase began so the dashboard can report "Active" execution time accurately. If the file already exists at this path, read it and resume from `currentPhase` (and from `phase4.currentTask` if mid-Phase-4) — do NOT overwrite the existing `currentPhaseStartedAt` (preserving it keeps mid-phase telemetry honest across resume). On resume past Phase 1, the state file should already be in the worktree (Step 1.5 having moved it earlier) — read from there instead.
+
+5b. **Load shared context ONCE from the primary main checkout** — use the Read tool to load these into conversation context so every subskill can reference them without re-reading. (At this point we are still in the primary repo's main checkout; cd into the worktree happens in Step 1.5.):
+   - `.adlc/context/architecture.md`
+   - `.adlc/context/conventions.md`
+   - `.adlc/context/project-overview.md`
+   - `.adlc/specs/REQ-xxx-*/requirement.md`
+   - `.adlc/config.yml` (if present)
+**Preflight verified** — when you invoke subskills in later phases, they may skip their own prerequisite checks (already validated here) AND they may skip re-reading `architecture.md` / `conventions.md` / `project-overview.md` (already in context). Treat the Step 0 loads as authoritative for the rest of the pipeline. Worktree creation is intentionally NOT part of Step 0 — it runs in Step 1.5 after Phase 1 passes.
+
+**After completing Step 0**: Update `pipeline-state.json` — add `0` to `completedPhases`, add Step 0 to `phaseHistory`, set `currentPhase` to `1`.
+
+---
+
+### Phase 1: Validate the Requirement Spec
+<!-- companion: proceed/phases-1-3-validation.md -->
+**Gate**: `currentPhase` must be `1`. After completion: append `1`, set `currentPhase=2`.
+
+Run `/validate` against the REQ spec. Validation reads `.adlc/specs/REQ-xxx-*/requirement.md` from the **primary main checkout** — at this point no worktree exists yet, and that's deliberate. APPROVED → mark `approved`, advance to Step 1.5. NEEDS REVISION → fix FAILs (in the main-checkout requirement.md) and re-validate (up to 3 loops); remaining blockers are legitimate halt #1. End-of-phase log: "Spec validated and approved." Full step list in companion.
+
+If validation surfaces unrecoverable blockers, halt — the pipeline never created any worktree, so cleanup is a no-op. Failed validation does not leave artifacts behind.
+
+---
+
+### Step 1.5: Create Worktrees + Move State File Into Primary Worktree
+
+Now that validation has passed, create the per-repo worktrees and migrate the pipeline-state file into the primary worktree. Subsequent phases (2–8) read and write the state file from the worktree, NEVER the main checkout.
+
+1. **Parse the declared worktree path (primary repo only)** — scan the launch prompt for the dispatch-line contract. The format is normative in `REQ-263 architecture.md` ("The dispatch-line contract" section); do not change the regex or format here without updating that document.
    - Regex: `^WORKTREE PATH \(mandatory\): (.+)$` (entire line, capture group is the absolute path).
    - If multiple lines match the regex, use the **first** match and ignore the rest. (This makes parser behavior deterministic if a future change accidentally embeds free-text content that matches.)
    - If present, use the captured path **verbatim** as the primary repo's worktree path. Do not modify, normalize, or append to it. Compute `<primary-worktree-path>` = the captured value.
    - If absent (e.g., a direct `/proceed REQ-xxx` invocation by a user), fall back to deriving `<primary-worktree-path>` = `<primary-repo-path>/.worktrees/REQ-xxx` (where REQ-xxx is the concrete REQ id, not a literal placeholder). This preserves existing behavior for direct invocations.
    - Sibling repo worktree paths are always derived: for each sibling repo `s`, `<sibling-worktree-path[s]>` = `<sibling-repo-path[s]>/.worktrees/REQ-xxx` from `.adlc/config.yml` — the dispatch line declares only the primary path.
-4b. **Validate against `git worktree list` before adding** — for **each** touched repo (primary and every sibling), run:
+
+2. **Validate against `git worktree list` before adding** — for **each** touched repo (primary and every sibling), run:
    ```bash
    git -C <repo-path> worktree list --porcelain
    ```
    Parse the line-oriented output: blocks separated by blank lines. Each block contains `worktree <abs-path>`, `HEAD <sha>`, and either `branch <ref>` or `detached`. Locked or prunable worktrees may add extra lines (`locked [<reason>]`, `prunable <reason>`) — ignore those; the only fields that matter for collision detection are `worktree` and `branch`. The first block is always the repo's primary working tree (the repo root) — it will not match any `<repo-path>/.worktrees/REQ-xxx` target path, so it is harmlessly skipped. Continue scanning every subsequent block.
 
    Compute `<expected-branch-ref>` = `refs/heads/feat/REQ-xxx-<slug>` where `<slug>` is the same slug `/proceed` would derive for this REQ (the value that becomes `repos[<id>].branch` in state). For a fresh run, derive the slug from the REQ title per the project's branch-naming convention; for a resume, read it from `repos[<id>].branch`. Then for each per-repo target path (`<primary-worktree-path>` for primary, `<sibling-worktree-path[s]>` for each sibling), classify the registration state:
-   - **No match** (target path not registered in any block): proceed to step 5 (`git worktree add` as normal).
+   - **No match** (target path not registered in any block): proceed to step 3 (`git worktree add` as normal).
    - **Match on `<expected-branch-ref>`** (same path, same branch): treat as resume per ADR-2 — record the path in state and **skip** the `git worktree add` for this repo. No halt, no re-add.
    - **Match on a different branch ref** (or a `detached` block at the target path): halt the pipeline immediately with a clear error naming the repo, the target path, the conflicting ref (or `detached HEAD`), and the cleanup commands the user must run. **Quote the substituted `<branch>` and `<path>` values with single quotes** in the surfaced commands so a user copy-paste cannot execute injected shell from a hostile branch name:
      ```
@@ -273,47 +305,35 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
 
      Then retry.
      ```
-     This is a fail-loud halt and is a **precondition error** — it does **NOT** count toward the three legitimate halt points listed in the Autonomous Execution Contract. The three-halt quota begins counting only once the pipeline is past Step 0. The same error format applies whether the colliding repo is primary or sibling.
-5. Create a worktree in each touched repo on the same branch name (skip any repo where step 4b classified the registration as a same-branch resume):
+     This is a fail-loud halt and is a **precondition error** — it does **NOT** count toward the three legitimate halt points listed in the Autonomous Execution Contract. The three-halt quota begins counting only once the pipeline is past Step 1.5. The same error format applies whether the colliding repo is primary or sibling.
+
+3. Create a worktree in each touched repo on the same branch name (skip any repo where step 2 classified the registration as a same-branch resume):
    ```bash
    git -C <repo-path> worktree add -b <branch-name> <worktree-path> origin/<integration-branch>
    ```
-   - The new feature branch is cut from `origin/<integration-branch>` (the ref resolved in step 4 — `staging` in two-branch repos, `main` otherwise), NOT from local `main`/`HEAD` (LESSON-036). The `-b` creates the branch; the explicit `origin/<integration-branch>` start-point makes the base deterministic regardless of what is checked out in the repo path.
-   - `<worktree-path>` is the **absolute** path resolved in 4a (`<primary-worktree-path>` for primary, `<sibling-worktree-path[s]>` for each sibling) — do **NOT** substitute a relative `.worktrees/REQ-xxx` here, even though the convention happens to produce an equivalent location. The whole point of the contract is that the orchestrator-declared absolute path is honored verbatim.
-   - `<branch-name>` is `<expected-branch-ref>` from 4b with the `refs/heads/` prefix stripped — i.e., literally `feat/REQ-xxx-<slug>`. Pass the bare branch name (not the full ref) to `git worktree add -b`. (On a same-branch resume, step 4b already skipped this add — the existing worktree/branch is reused as-is.)
+   - The new feature branch is cut from `origin/<integration-branch>` (the ref resolved in Step 0 item 4 — `staging` in two-branch repos, `main` otherwise), NOT from local `main`/`HEAD` (LESSON-036). The `-b` creates the branch; the explicit `origin/<integration-branch>` start-point makes the base deterministic regardless of what is checked out in the repo path.
+   - `<worktree-path>` is the **absolute** path resolved in step 1 (`<primary-worktree-path>` for primary, `<sibling-worktree-path[s]>` for each sibling) — do **NOT** substitute a relative `.worktrees/REQ-xxx` here, even though the convention happens to produce an equivalent location. The whole point of the contract is that the orchestrator-declared absolute path is honored verbatim.
+   - `<branch-name>` is `<expected-branch-ref>` from step 2 with the `refs/heads/` prefix stripped — i.e., literally `feat/REQ-xxx-<slug>`. Pass the bare branch name (not the full ref) to `git worktree add -b`. (On a same-branch resume, step 2 already skipped this add — the existing worktree/branch is reused as-is.)
 
-   Record each repo's absolute `worktree` path and `branch` in the state file's `repos` block. The recorded path is **immutable** for the rest of the run — Phases 1–8 read it from `repos[<id>].worktree`, never re-derive from cwd.
-6. **Initialize `pipeline-state.json`** in the **primary worktree's** spec directory (`<primary-worktree-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json`) with `currentPhase: 0, currentPhaseStartedAt: <now>, completedPhases: [], completed: false, startedAt: <now>, integrationBranch: <integration-branch>, repos: {...resolved registry with absolute paths, worktrees, branches, touched flags...}, mergeOrder: [...from config.yml or declared order, filtered to touched repos...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`.
+   Record each repo's absolute `worktree` path and `branch` in the main-checkout state file's `repos` block. The recorded path is **immutable** for the rest of the run — Phases 2–8 read it from `repos[<id>].worktree`, never re-derive from cwd.
 
-   **Write the state file BEFORE cd / shared-context loading** so the sprint dashboard sees the in-flight REQ within ~1.5s of the worktree being created. Loading 5 context files takes several seconds, and during that gap the worktree exists on disk but no state file exists, so `/sprint` and the dashboard cannot tell the pipeline has started. Initializing here closes that gap.
+4. **Move the pipeline-state file into the primary worktree.** The pre-validation file at `<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json` (written in Step 0 item 5a) becomes the live file at `<primary-worktree-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json`. Use a copy + remove (NOT `mv`) and ensure both writes happen via the file system, not git, since the file is untracked at this point in both locations.
+   ```bash
+   mkdir -p "<primary-worktree-path>/.adlc/specs/REQ-xxx-*"
+   cp "<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json" \
+      "<primary-worktree-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json"
+   rm "<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json"
+   ```
+   The dashboard's worktree-aware scan finds the file under the worktree on its next ~1.5s poll; it never sees both at once. From this point on, every state-file read/write goes to the worktree path.
 
-   `integrationBranch` is the value resolved in step 4 — Phase 6 (PR base) and Phase 8 (merge target) MUST read it from state, never re-derive or assume `main`. `currentPhaseStartedAt` records when the in-flight phase began so the dashboard can report "Active" execution time accurately (vs. wall-clock `startedAt`). If the file already exists, read it and resume from `currentPhase` (and from `phase4.currentTask` if mid-Phase-4) — do NOT recreate worktrees that already exist, and do NOT overwrite the existing `currentPhaseStartedAt` (preserving it keeps mid-phase telemetry honest across resume).
-7. Change your working directory to the **primary repo's worktree** — orchestration (state file reads/writes, spec edits, PR coordination) happens there. Task implementation in Phase 4 will `cd` into the target repo's worktree per task.
-8. **Load shared context ONCE from the primary** — use the Read tool to load these into conversation context so every subskill can reference them without re-reading:
-   - `.adlc/context/architecture.md`
-   - `.adlc/context/conventions.md`
-   - `.adlc/context/project-overview.md`
-   - `.adlc/specs/REQ-xxx-*/requirement.md`
-   - `.adlc/config.yml` (if present)
-9. When the pipeline completes (all PRs merged in Phase 8), clean up every worktree using the absolute path recorded in state — read `repos[<id>].worktree` for each touched repo and pass that value to `git worktree remove`. Do NOT use the relative `.worktrees/REQ-xxx` form here — the contract requires the recorded absolute path:
+5. **Change your working directory to the primary repo's worktree.** Orchestration (state file reads/writes, spec edits, PR coordination) happens there from now on. Task implementation in Phase 4 will `cd` into the target repo's worktree per task.
+
+6. **Worktree cleanup obligation** (Phase 8, not here): when the pipeline completes (all PRs merged), clean up every worktree using the absolute path recorded in state — read `repos[<id>].worktree` for each touched repo and pass that value to `git worktree remove`. Do NOT use the relative `.worktrees/REQ-xxx` form here — the contract requires the recorded absolute path:
    ```bash
    git -C <repo-path> worktree remove <repos[<id>].worktree>
    ```
 
-**Preflight verified** — when you invoke subskills in later phases, they may skip their own prerequisite checks (already validated here) AND they may skip re-reading `architecture.md` / `conventions.md` / `project-overview.md` (already in context). Treat the Step 0 loads as authoritative for the rest of the pipeline.
-
-**After completing Step 0**: Update `pipeline-state.json` — add `0` to `completedPhases`, add Step 0 to `phaseHistory`, set `currentPhase` to `1`.
-
----
-
-### Phase 1: Validate the Requirement Spec
-<!-- companion: proceed/phases-1-3-validation.md -->
-**Gate**: `currentPhase` must be `1`. After completion: append `1`, set `currentPhase=2`.
-
-Run `/validate` against the REQ spec. APPROVED → mark `approved`, advance.
-NEEDS REVISION → fix FAILs and re-validate (up to 3 loops); remaining
-blockers are legitimate halt #1. End-of-phase log: "Spec validated and
-approved." Full step list in companion.
+After Step 1.5: `currentPhase` is still `1` (Phase 1 is already in `completedPhases`); Step 1.5 is part of the pipeline plumbing, not a numbered phase. Append a `phaseHistory` entry named `"Step 1.5: Create Worktrees"` for telemetry continuity, then advance to Phase 2.
 
 ---
 

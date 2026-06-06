@@ -52,10 +52,10 @@ If you find yourself wanting to put a descriptive string into `currentPhase` "fo
 
 ## Worktree Isolation
 
-You operate inside an isolated worktree for the entire run. The path is set once in Step 0 (read from the launch prompt's `WORKTREE PATH (mandatory): ...` line, or derived as fallback) and written to `pipeline-state.json.repos[<id>].worktree`. From the moment Step 0 completes, that recorded path is immutable. Obey these rules:
+You operate inside an isolated worktree for the entire run **after Step 1.5**. Step 0 (preflight + state init) and Phase 1 (Validate Spec) run in the primary repo's MAIN CHECKOUT — no worktree exists yet, by design, so a failed validation does not leave a stray worktree behind. Step 1.5 (after Phase 1 passes) parses the launch prompt's `WORKTREE PATH (mandatory): ...` line, runs `git worktree add`, moves the pre-validation `pipeline-state.json` from the main checkout into the worktree, and `cd`s in. From Step 1.5 onward, `pipeline-state.json.repos[<id>].worktree` is the immutable source of truth for the path.
 
-1. **State is the sole source of truth post-Step-0.** Step 0 reads the launch prompt **once** to populate state. Every phase after Step 0 MUST read the worktree path exclusively from `pipeline-state.json.repos[<id>].worktree`. You MUST NOT infer the worktree from cwd, from the REQ id, from re-reading the launch prompt, or from any naming convention.
-2. **Re-confirm the active worktree at the start of every phase after Step 0.** Read `pipeline-state.json` first thing; do not assume cwd, paths, or context from a prior phase carry over. Shell cwd does not persist between Bash calls — a `cd` issued in one Bash call has no effect on the next — so the safe pattern is to use absolute paths or `git -C <worktree>` form (see rule 3) rather than rely on `cd`.
+1. **State is the sole source of truth post-Step-1.5.** Step 1.5 reads the launch prompt **once** to populate state. Every phase from Phase 2 onward MUST read the worktree path exclusively from `pipeline-state.json.repos[<id>].worktree`. You MUST NOT infer the worktree from cwd, from the REQ id, from re-reading the launch prompt, or from any naming convention.
+2. **Re-confirm the active worktree at the start of every phase from Phase 2 onward.** Read `pipeline-state.json` first thing; do not assume cwd, paths, or context from a prior phase carry over. Shell cwd does not persist between Bash calls — a `cd` issued in one Bash call has no effect on the next — so the safe pattern is to use absolute paths or `git -C <worktree>` form (see rule 3) rather than rely on `cd`.
 3. **Every Bash call MUST use absolute paths or `git -C <worktree>` form.** You MUST NOT rely on inherited cwd. Relative paths are a protocol violation.
 4. **You MUST NOT write to the parent repo's working tree.** The single sanctioned exception is the Phase 8 single-repo `gh pr merge`, which runs from `repos[<id>].path` because git refuses to delete a branch checked out by a worktree. See "Worktree gotchas" under Phase 8 for the operational detail — do not generalize that exception to any other command.
 
@@ -63,8 +63,9 @@ You operate inside an isolated worktree for the entire run. The path is set once
 
 Execute these phases in order, maintaining `pipeline-state.json` throughout:
 
-0. **Create Worktree + Preflight**: Create isolated worktree, load shared context, initialize state
-1. **Validate Spec**: Run the `/validate` checklist inline
+0. **Preflight + Pre-Validation State Init**: resolve repo registry, write `pipeline-state.json` to the primary main checkout (so the dashboard sees the pipeline immediately), load shared context. NO worktree yet.
+1. **Validate Spec**: Run the `/validate` checklist inline against the main-checkout `requirement.md`. APPROVED → move to Step 1.5. NEEDS REVISION → fix and re-validate up to 3 loops.
+1.5. **Create Worktrees + Move State File**: parse the launch prompt's `WORKTREE PATH (mandatory):` line, `git worktree add` from `origin/<integration-branch>`, then `cp` the state file into the new worktree's `.adlc/specs/REQ-xxx-*/` and `rm` it from the main checkout. `cd` into the worktree. From here on, all phases read/write state from the worktree.
 2. **Architect & Tasks**: Design architecture and break into tasks (explore codebase yourself, do not launch explore agents)
 3. **Validate Architecture**: Run the `/validate` checklist inline for architecture phase
 4. **Implement**: Execute each task sequentially (follow dependency order)
