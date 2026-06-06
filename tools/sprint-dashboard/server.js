@@ -1,21 +1,25 @@
 #!/usr/bin/env node
-// ADLC sprint dashboard — zero-dep SSE server.
-// See: .adlc/specs/REQ-xxx-*/spec.md (when one exists for this dashboard).
+// ADLC sprint dashboard — zero-dep multi-project SSE server.
+// Reads ~/.adlc/dashboard-registry.json on every poll and aggregates
+// .adlc/specs/REQ-*/ across every registered project root.
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
-const ROOT = process.env.ADLC_ROOT || process.cwd();
+const HOME = os.homedir();
+const HOME_RUNTIME = path.join(HOME, '.adlc', 'runtime');
+const PID_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.pid');
+const PORT_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.port');
+const URL_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.url');
+const LOG_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.log');
+const REGISTRY_FILE = path.join(HOME, '.adlc', 'dashboard-registry.json');
+
 const PORT = parseInt(process.env.ADLC_DASHBOARD_PORT || '5174', 10);
 const HOST = '127.0.0.1';
 const POLL_MS = 1500;
-const RUNTIME_DIR = path.join(ROOT, '.adlc', 'runtime');
-const PID_FILE = path.join(RUNTIME_DIR, 'sprint-dashboard.pid');
-const PORT_FILE = path.join(RUNTIME_DIR, 'sprint-dashboard.port');
-const URL_FILE = path.join(RUNTIME_DIR, 'sprint-dashboard.url');
-const LOG_FILE = path.join(RUNTIME_DIR, 'sprint-dashboard.log');
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 
@@ -37,16 +41,8 @@ function log(msg) {
   } catch (_) { /* no-op */ }
 }
 
-function ensureRuntimeDir() {
-  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
-}
-
-function listSpecDirs() {
-  const specsRoot = path.join(ROOT, '.adlc', 'specs');
-  if (!fs.existsSync(specsRoot)) return [];
-  return fs.readdirSync(specsRoot)
-    .filter((name) => /^REQ-/.test(name))
-    .map((name) => path.join(specsRoot, name));
+function ensureHomeRuntime() {
+  fs.mkdirSync(HOME_RUNTIME, { recursive: true });
 }
 
 function readJsonSafe(file) {
@@ -57,6 +53,34 @@ function readJsonSafe(file) {
   } catch (_) {
     return null;
   }
+}
+
+function readRegistry() {
+  const data = readJsonSafe(REGISTRY_FILE);
+  if (!data || !Array.isArray(data.roots)) return [];
+  const seen = new Set();
+  const roots = [];
+  for (const r of data.roots) {
+    if (!r || typeof r.path !== 'string') continue;
+    if (seen.has(r.path)) continue;
+    seen.add(r.path);
+    roots.push({
+      path: r.path,
+      name: typeof r.name === 'string' && r.name ? r.name : path.basename(r.path),
+      registeredAt: r.registeredAt || null,
+    });
+  }
+  return roots;
+}
+
+function listSpecDirs(root) {
+  const specsRoot = path.join(root, '.adlc', 'specs');
+  if (!fs.existsSync(specsRoot)) return [];
+  let entries;
+  try { entries = fs.readdirSync(specsRoot); } catch (_) { return []; }
+  return entries
+    .filter((name) => /^REQ-/.test(name))
+    .map((name) => path.join(specsRoot, name));
 }
 
 function readReqTitle(specDir) {
@@ -75,11 +99,15 @@ function readReqTitle(specDir) {
 function readTaskStrip(specDir) {
   const tasksDir = path.join(specDir, 'tasks');
   if (!fs.existsSync(tasksDir)) return [];
-  const files = fs.readdirSync(tasksDir)
-    .filter((f) => /^TASK-.*\.md$/.test(f))
-    .sort();
+  let files;
+  try {
+    files = fs.readdirSync(tasksDir)
+      .filter((f) => /^TASK-.*\.md$/.test(f))
+      .sort();
+  } catch (_) { return []; }
   return files.map((f) => {
-    const txt = fs.readFileSync(path.join(tasksDir, f), 'utf8');
+    let txt = '';
+    try { txt = fs.readFileSync(path.join(tasksDir, f), 'utf8'); } catch (_) {}
     const idMatch = f.match(/^(TASK-\d+)/);
     const statusMatch = txt.match(/^status:\s*(.+)$/m);
     const titleMatch = txt.match(/^title:\s*(.+)$/m) ||
@@ -111,9 +139,11 @@ function projectReqState(specDir) {
       blockers: [],
       currentTask: null,
       failedTasks: [],
+      completedTasks: [],
       completedPhases: [],
       lastPhase: null,
       startedAt: null,
+      integrationBranch: null,
       repos: {},
       tasks,
     };
@@ -154,15 +184,27 @@ function projectReqState(specDir) {
   };
 }
 
-function snapshot() {
-  const dirs = listSpecDirs();
+function snapshotProject(root) {
+  const dirs = listSpecDirs(root.path);
   const reqs = dirs.map(projectReqState).filter(Boolean);
   reqs.sort((a, b) => a.reqId.localeCompare(b.reqId));
   return {
-    generatedAt: new Date().toISOString(),
-    root: ROOT,
-    phaseLabels: PHASE_LABELS,
+    name: root.name,
+    path: root.path,
+    exists: fs.existsSync(path.join(root.path, '.adlc')),
     reqs,
+  };
+}
+
+function snapshot() {
+  const roots = readRegistry();
+  const projects = roots.map(snapshotProject)
+    .filter((p) => p.exists);
+  projects.sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    generatedAt: new Date().toISOString(),
+    phaseLabels: PHASE_LABELS,
+    projects,
   };
 }
 
@@ -208,7 +250,12 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, root: ROOT, pid: process.pid }));
+    res.end(JSON.stringify({
+      ok: true,
+      pid: process.pid,
+      registry: REGISTRY_FILE,
+      projects: readRegistry().length,
+    }));
     return;
   }
   if (url === '/events') {
@@ -233,7 +280,7 @@ function shutdown() {
   process.exit(0);
 }
 
-ensureRuntimeDir();
+ensureHomeRuntime();
 
 server.on('error', (err) => {
   log(`server error: ${err && err.message}`);
@@ -244,7 +291,7 @@ server.listen(PORT, HOST, () => {
   fs.writeFileSync(PID_FILE, String(process.pid));
   fs.writeFileSync(PORT_FILE, String(PORT));
   fs.writeFileSync(URL_FILE, `http://${HOST}:${PORT}`);
-  log(`listening on http://${HOST}:${PORT} (root=${ROOT})`);
+  log(`listening on http://${HOST}:${PORT}`);
   startPolling();
 });
 
