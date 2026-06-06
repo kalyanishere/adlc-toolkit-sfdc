@@ -63,6 +63,7 @@ Deterministic Dynamic-Workflow scripts powering `/sprint --workflow`. See [`work
 - [`tools/sf-lint/`](tools/sf-lint/README.md) — Salesforce-rules static checker (sharing keyword, AccessLevel, no `@future`, no `SeeAllData=true`, no SOQL/DML in loops, no hardcoded IDs/URLs, perm-set naming, `View/ModifyAllData` anti-patterns, ApexDoc presence)
 - [`tools/lint-skills/`](tools/lint-skills/README.md) — SKILL.md hygiene + agent-model policy gate (Sonnet/Opus only) + sf-quality-checklist sourcing advisory
 - [`tools/sf-preflight/`](tools/sf-preflight/README.md) — local pre-deploy gates that catch failures in seconds instead of paying 60-90s per `sf project deploy validate`. `permsets` (REQ-B): queries Tooling-API `FieldDefinition` and validates every `<fieldPermissions>` against required / formula / master-detail / auto-number / missing-from-org rules. `metadata` (REQ-F): workspace-internal cross-reference — perm-sets to Apex/apps/tabs/record-types, layouts to fields, FlexiPages to objects. Wired into `generating-permission-set` SKILL.md and `/canary` Step 2a.
+- [`tools/sprint-dashboard/`](tools/sprint-dashboard/README.md) — zero-dep, single-server live dashboard that renders every registered project's REQs from `.adlc/specs/*/pipeline-state.json`. SSE-pushed updates (~1.5s), per-phase telemetry (Duration / Active / Last completion), project dropdown, manual refresh. Auto-launched by `/spec`, `/proceed`, `/sprint`, and `/init`; `/init` also opens it in Chrome and registers the project in `~/.adlc/dashboard-registry.json`.
 
 ### Quality gates
 
