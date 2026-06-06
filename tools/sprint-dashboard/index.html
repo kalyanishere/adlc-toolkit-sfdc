@@ -285,7 +285,14 @@
     const failed = new Set(req.failedTasks || []);
     const chips = req.tasks.map((t) => {
       let status = (t.status || '').toLowerCase().replace(/\s+/g, '_');
-      if (completed.has(t.id)) status = 'complete';
+      if (completed.has(t.id)) {
+        // Tasks recorded in phase4.completedTasks are individually done,
+        // but green is reserved for the terminal "the whole pipeline is
+        // merged" signal. While the pipeline itself is still in flight
+        // (not req.completed), show finished tasks in blue (in_progress
+        // / shipped-but-pipeline-ongoing). Green = pipeline done end-to-end.
+        status = req.completed ? 'complete' : 'in_progress';
+      }
       if (failed.has(t.id)) status = 'failed';
       if (req.currentTask === t.id) status = 'in_progress';
       const titleAttr = `${t.id}${t.title ? ' — ' + t.title : ''} (${t.status || 'unknown'})`;

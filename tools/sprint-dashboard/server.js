@@ -145,7 +145,11 @@ function readTaskStrip(specDir) {
   return files.map((f) => {
     let txt = '';
     try { txt = fs.readFileSync(path.join(tasksDir, f), 'utf8'); } catch (_) {}
-    const idMatch = f.match(/^(TASK-\d+)/);
+    // TASK ids may carry a REQ-numbered prefix segment, e.g.
+    // TASK-010-001-tmp-applicant-object.md → id "TASK-010-001". Match
+    // any sequence of "-<digits>" runs after the literal "TASK-" so
+    // TASK-001, TASK-010-001, and TASK-010-001-002 all parse correctly.
+    const idMatch = f.match(/^(TASK(?:-\d+)+)/);
     const statusMatch = txt.match(/^status:\s*(.+)$/m);
     const titleMatch = txt.match(/^title:\s*(.+)$/m) ||
       txt.match(/^#\s+(.+)$/m);
@@ -246,19 +250,36 @@ function projectReqState(specDir) {
   // alongside the data so the UI can flag it.
   const schemaViolations = [];
   let currentPhase = null;
+  // Terminal-state words a runner sometimes writes when it should be
+  // setting completed:true and currentPhase:8 instead.
+  const terminalWords = new Set(['merged', 'complete', 'completed', 'done', 'wrapup']);
   if (typeof state.currentPhase === 'number' && Number.isInteger(state.currentPhase)) {
     currentPhase = state.currentPhase;
   } else if (typeof state.currentPhase === 'string') {
     const m = state.currentPhase.match(/(\d+)/);
+    const lower = state.currentPhase.toLowerCase();
     if (m) {
       currentPhase = Number(m[1]);
       schemaViolations.push(`currentPhase was string "${state.currentPhase}" — coerced to ${currentPhase}`);
+    } else if (terminalWords.has(lower)) {
+      currentPhase = 8;
+      schemaViolations.push(`currentPhase was terminal-state string "${state.currentPhase}" — coerced to 8 (Phase 8 is the canonical end). Runner should set completed:true and currentPhase:8 separately.`);
     } else {
       schemaViolations.push(`currentPhase was string "${state.currentPhase}" with no numeric component`);
     }
   } else if (state.currentPhase != null) {
     schemaViolations.push(`currentPhase had unexpected type ${typeof state.currentPhase}`);
   }
+  // If completed is true but currentPhase couldn't be resolved, default
+  // to 8 — the canonical end. Otherwise the phase strip is empty for
+  // already-merged REQs whose state files have a malformed currentPhase.
+  if (currentPhase === null && state.completed === true) {
+    currentPhase = 8;
+  }
+  // Conversely: if state has terminal-word currentPhase but no explicit
+  // `completed: true`, infer completion. The runner clearly thought the
+  // pipeline was done.
+  const inferCompleted = (typeof state.currentPhase === 'string' && terminalWords.has(state.currentPhase.toLowerCase())) || state.completed === true;
 
   // Helper: extract a phase index 0..8 from either a number or a string
   // like "phase-3-validate-architecture". Returns null when no integer
@@ -300,7 +321,7 @@ function projectReqState(specDir) {
     title,
     hasState: true,
     currentPhase,
-    completed: !!state.completed,
+    completed: inferCompleted,
     blockers: Array.isArray(state.blockers) ? state.blockers : [],
     currentTask: state.phase4?.currentTask || null,
     failedTasks: Array.isArray(state.phase4?.failedTasks) ? state.phase4.failedTasks : [],
