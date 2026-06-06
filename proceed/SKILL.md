@@ -35,7 +35,7 @@ For everything else — including every **End-of-phase log** block below, every 
 ## Context
 
 - SF quality checklist: !`cat .adlc/partials/sf-quality-checklist.md 2>/dev/null || cat ~/.claude/skills/partials/sf-quality-checklist.md 2>/dev/null || echo "No sf-quality-checklist found"`
-- Sprint dashboard: !`sh tools/sprint-dashboard/launch.sh 2>&1`
+- Sprint dashboard: !`sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`
 
 ## Arguments
 
