@@ -4,6 +4,7 @@
     "defaultMode": "acceptEdits",
     "allow": [
       "Bash(git status:*)",
+      "Bash(git -C:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
