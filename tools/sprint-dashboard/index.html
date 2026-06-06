@@ -80,6 +80,10 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden;
   }
+  .req.is-stalled {
+    border-color: rgba(248,113,113,0.45);
+    box-shadow: 0 0 0 1px rgba(248,113,113,0.15);
+  }
   .req-head {
     display: flex; align-items: center; gap: 12px; padding: 12px 14px;
     border-bottom: 1px solid var(--border);
@@ -99,6 +103,25 @@
   .pill.failed  { background: rgba(248,113,113,0.18); color: var(--failed); }
   .pill.merged  { background: rgba(52,211,153,0.18); color: var(--done); }
   .pill.idle    { background: rgba(139,148,167,0.18); color: var(--muted); }
+  .pill.stalled {
+    background: rgba(248,113,113,0.18); color: var(--bad);
+    margin-left: 0; cursor: help;
+    animation: pulse-bad 2s ease-in-out infinite;
+  }
+  @keyframes pulse-bad {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.30); }
+    50%      { box-shadow: 0 0 0 4px rgba(248,113,113,0.00); }
+  }
+  .stall-hint {
+    margin-top: 6px; padding: 8px 11px; border-radius: 6px;
+    background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.30);
+    color: #fecaca; font-size: 11px;
+  }
+  .stall-hint code {
+    background: rgba(0,0,0,0.30); padding: 1px 6px; border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #fecaca;
+  }
   .req-body { padding: 12px 14px; display: grid; gap: 10px; }
   .phase-strip { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
   .phase {
@@ -380,11 +403,23 @@
     const branch = req.integrationBranch ? `<span>Base <b>${escapeHtml(req.integrationBranch)}</b></span>` : '';
     const taskLine = req.currentTask ? `<span>Task <b>${escapeHtml(req.currentTask)}</b></span>` : '';
 
+    // Stalled pipeline detection. The server flags req.stalled when no
+    // phase has completed and no new phase has started for longer than
+    // ADLC_DASHBOARD_STALL_SECONDS (default 5 min). Surface a pulsing
+    // pill alongside the state pill, plus a one-line resume hint.
+    const stalledPill = req.stalled
+      ? `<span class="pill stalled" title="No state-file write in ${fmtSpan(req.stalledSeconds * 1000)}. The pipeline-runner may be hung on a tool call, waiting on a permission prompt nobody answered, or genuinely doing slow work. Threshold: ${req.stallThresholdSec}s.">⚠ stalled (${fmtSpan(req.stalledSeconds * 1000)})</span>`
+      : '';
+    const stallHint = req.stalled
+      ? `<div class="stall-hint">No progress for <b>${fmtSpan(req.stalledSeconds * 1000)}</b>. To resume from <code>currentPhase=${escapeHtml(String(req.currentPhase ?? '?'))}</code>, run: <code>/proceed ${escapeHtml(req.reqId)}</code></div>`
+      : '';
+
     return `
-      <section class="req">
+      <section class="req${req.stalled ? ' is-stalled' : ''}">
         <div class="req-head">
           <span class="req-id">${escapeHtml(req.reqId)}</span>
           <span class="req-title ${req.title ? '' : 'muted'}">${escapeHtml(req.title || '(no title)')}</span>
+          ${stalledPill}
           <span class="pill ${pill.cls}">${pill.label}</span>
         </div>
         <div class="req-body">
@@ -393,6 +428,7 @@
           ${renderRepos(req)}
           ${renderTasks(req)}
           ${renderBlockers(req)}
+          ${stallHint}
         </div>
       </section>
     `;

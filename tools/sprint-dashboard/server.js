@@ -21,6 +21,12 @@ const REGISTRY_FILE = path.join(HOME, '.adlc', 'dashboard-registry.json');
 const PORT = parseInt(process.env.ADLC_DASHBOARD_PORT || '5174', 10);
 const HOST = '127.0.0.1';
 const POLL_MS = 1500;
+// Threshold for flagging a REQ as "stalled" — measured from
+// the most recent phaseHistory completion (lastActivityAt) and from
+// currentPhaseStartedAt for the in-flight phase. Defaults to 5 minutes.
+// Tune via ADLC_DASHBOARD_STALL_SECONDS for projects with naturally slow
+// phases (e.g. a multi-minute Apex test phase).
+const STALL_THRESHOLD_SEC = parseInt(process.env.ADLC_DASHBOARD_STALL_SECONDS || '300', 10);
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 
@@ -192,6 +198,9 @@ function projectReqState(specDir) {
       repos: {},
       tasks,
       schemaViolations: [],
+      stalled: false,
+      stalledSeconds: 0,
+      stallThresholdSec: STALL_THRESHOLD_SEC,
     };
   }
 
@@ -316,6 +325,28 @@ function projectReqState(specDir) {
   // win — the phase strip lights up correctly even when the runner
   // wrote bad shapes.)
 
+  // Stall detection. The dashboard already tracks "Last completion"
+  // (now − lastActivityAt) and the in-flight phase span
+  // (now − currentPhaseStartedAt). Whichever signal is MORE recent is
+  // the right indicator that the pipeline is actively progressing —
+  // a phase that just started has currentPhaseStartedAt close to now,
+  // and a phase that just completed has lastActivityAt close to now.
+  // Take the max of the two and treat (now - max) as the stall age.
+  // Skip stall detection on completed REQs (they're at rest).
+  let stalledSeconds = 0;
+  let stalled = false;
+  if (!inferCompleted) {
+    const candidates = [lastActivityAt, currentPhaseStartedAt]
+      .filter((s) => typeof s === 'string')
+      .map((s) => Date.parse(s))
+      .filter(Number.isFinite);
+    if (candidates.length) {
+      const mostRecent = Math.max(...candidates);
+      stalledSeconds = Math.floor((Date.now() - mostRecent) / 1000);
+      if (stalledSeconds >= STALL_THRESHOLD_SEC) stalled = true;
+    }
+  }
+
   return {
     reqId,
     title,
@@ -337,6 +368,9 @@ function projectReqState(specDir) {
     repos,
     tasks,
     schemaViolations,
+    stalled,
+    stalledSeconds,
+    stallThresholdSec: STALL_THRESHOLD_SEC,
   };
 }
 
