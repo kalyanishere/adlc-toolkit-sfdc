@@ -342,6 +342,7 @@ CLASS_FLOOR=${CLASS_FLOOR:-75}
 If `pipeline-state.json` exists for the current REQ (we're inside `/proceed`):
 1. Add a `canary` entry to `phaseHistory` with the result (passed/failed) per environment
 2. Include: target org alias, deploy id, validate duration, test pass/fail count, agent test result, coverage %
+3. The entry's `startedAt` and `completedAt` MUST be the literal output of `date -u +"%Y-%m-%dT%H:%M:%SZ"` run via the Bash tool — once at canary entry start, once at completion. Do NOT type a timestamp in. The LLM has no reliable clock; freelanced values pollute dashboard Duration/Active telemetry.
 
 Otherwise, just emit the report to stdout.
 

@@ -186,6 +186,16 @@ The `snapshotBranch` and `snapshotPR` fields on each `repos.<id>` entry are **de
 
 **Gate Protocol — follow exactly**:
 
+**Timestamps come from the OS, never from the LLM.** Every `<now>` placeholder in this document — `startedAt`, `currentPhaseStartedAt`, every `phaseHistory[*].startedAt` and `completedAt` — MUST be the literal output of:
+
+```bash
+date -u +"%Y-%m-%dT%H:%M:%SZ"
+```
+
+run via the Bash tool at the moment the value is needed. Do NOT type a timestamp in (no "today is 2026-06-06" reasoning, no "I'll use the current ISO-8601 time"). The LLM has no reliable clock and freelancing values poisons the dashboard's Active/Idle telemetry — fabricated `2026-06-06T00:00:00Z` values are how this gets caught. If the Bash command fails, halt the pipeline rather than guessing.
+
+The same rule applies to subagent dispatches (pipeline-runner under /sprint): the agent's first action when reaching any timestamp write MUST be to run the Bash command above. State-file writes happen via Edit or Write — both of which require the value to be the exact captured Bash output, not a value the LLM types.
+
 1. **Initialize** the state file at the start of Step 0 with `currentPhase: 0, currentPhaseStartedAt: <now>, completedPhases: [], completed: false, repos: {...resolved from config...}, mergeOrder: [...], phase4: { currentTask: null, completedTasks: [], failedTasks: [] }`
 2. **Before starting any phase**: read `pipeline-state.json`. Verify `currentPhase` equals the phase you're about to start AND the previous phase is in `completedPhases`. If either check fails, **STOP** — you skipped a phase. Go back and complete it. **Telemetry**: if `currentPhaseStartedAt` is null/missing or if `currentPhase` was just advanced (i.e. you're entering a new phase), set `currentPhaseStartedAt` to the current ISO-8601 timestamp before doing any phase work. Resuming an interrupted phase MUST preserve the existing `currentPhaseStartedAt` (do NOT overwrite — that would erase already-accrued execution time on resume).
 3. **After completing any phase**: append the phase number to `completedPhases`, append an entry to `phaseHistory` with `{phase, name, startedAt: <currentPhaseStartedAt>, completedAt: <now>}`, set `currentPhase` to the next phase number, and set `currentPhaseStartedAt` to the current timestamp (the next phase begins immediately). On the final phase (Phase 8), set `currentPhaseStartedAt` to `null` instead — the pipeline is done.

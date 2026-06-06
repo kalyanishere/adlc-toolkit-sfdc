@@ -113,9 +113,9 @@ In cross-repo mode you will resolve a `<ARTIFACT_ROOT>` per touched repo using t
 
 1. Set the requirement's frontmatter status to `complete` in `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/requirement.md`
 2. Set all task statuses to `complete` in `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/tasks/*.md`
-3. Update the `updated` date on all modified artifacts to today's date
+3. Update the `updated` date on all modified artifacts to today's date — get the value via `date -u +"%Y-%m-%d"` run through the Bash tool; do NOT type the date in (LLM has no reliable clock).
 4. If any tasks were deferred or descoped, note them in the requirement file under a "Deferred" section
-5. If `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/pipeline-state.json` exists, update it: set `"completed": true`, add a final entry to `phaseHistory` with `{phase, name, startedAt: <currentPhaseStartedAt>, completedAt: <now>}`, and clear `currentPhaseStartedAt` (set it to `null`) since no phase is in flight after wrapup
+5. If `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/pipeline-state.json` exists, update it: set `"completed": true`, add a final entry to `phaseHistory` with `{phase, name, startedAt: <currentPhaseStartedAt>, completedAt: <now>}`, and clear `currentPhaseStartedAt` (set it to `null`) since no phase is in flight after wrapup. **`<now>` MUST be the literal output of `date -u +"%Y-%m-%dT%H:%M:%SZ"` run via the Bash tool** — never typed in by the LLM. Same rule applies anywhere else this skill writes a timestamp.
 
 ### Step 3a: Salesforce — Permissions.md gate
 

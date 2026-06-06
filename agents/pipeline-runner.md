@@ -20,6 +20,23 @@ You are running as a subagent. **You CANNOT dispatch sub-agents.** All work must
 - **Phase 4 (Implement)**: Execute tasks ONE AT A TIME, not in parallel. Follow the dependency order, but implement each task sequentially.
 - **Phase 5 (Verify)**: Run the review and reflection checklists INLINE in your own context. Do not attempt to launch reviewer or reflector agents. Use the checklists below.
 
+## Timestamps come from the OS, never from you
+
+Every `pipeline-state.json` timestamp — `startedAt`, `currentPhaseStartedAt`, every `phaseHistory[*].startedAt` and `completedAt` — MUST be the literal output of:
+
+```bash
+date -u +"%Y-%m-%dT%H:%M:%SZ"
+```
+
+run via the Bash tool at the moment the value is needed. Do NOT type the timestamp in. You have no reliable clock; freelanced values (e.g. `2026-06-06T00:00:00Z`) corrupt the dashboard's Duration / Active / Last-completion telemetry. The pattern is:
+
+1. Reach a write site (phase entry, phase completion, state init).
+2. Run `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash.
+3. Capture the output exactly.
+4. Use Edit/Write to embed that exact string into `pipeline-state.json`.
+
+If the Bash command fails for any reason, halt the pipeline rather than guessing.
+
 ## Worktree Isolation
 
 You operate inside an isolated worktree for the entire run. The path is set once in Step 0 (read from the launch prompt's `WORKTREE PATH (mandatory): ...` line, or derived as fallback) and written to `pipeline-state.json.repos[<id>].worktree`. From the moment Step 0 completes, that recorded path is immutable. Obey these rules:
