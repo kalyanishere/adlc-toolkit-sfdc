@@ -440,34 +440,80 @@ else
     cp "$TOOLKIT_PW/README.md" "$pw_specs/README.md"
   fi
 
-  # 6. Advise on package.json wiring. We do NOT auto-edit package.json — many
-  # projects use pnpm/yarn with custom test orchestration. test-auditor flags
-  # the missing test:e2e script as Minor (a wiring nit, not a hard fail), so a
-  # printed advisory is sufficient.
-  if [ -f package.json ] && ! grep -q '"test:e2e"' package.json; then
-    cat <<'EOF'
+  # 6. Wire Playwright into package.json — install the dev dep, install the
+  # chromium browser binary, and add the "test:e2e": "playwright test" script.
+  # This step is mandatory by default so the harness is immediately usable;
+  # set ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1 to opt out (e.g. offline init,
+  # CI bootstrap that handles deps separately, pnpm/yarn projects that
+  # manage installs out-of-band).
+  if [ "${ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL:-0}" = "1" ]; then
+    echo "Skipped Playwright npm install (ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1). Run manually:"
+    echo "  npm install --save-dev @playwright/test"
+    echo "  npx playwright install --with-deps chromium"
+    echo "  and add \"test:e2e\": \"playwright test\" to package.json scripts."
+  elif [ ! -f package.json ]; then
+    echo "Skipped Playwright npm install — no package.json at repo root. Run /init from the repo root, or scaffold one first."
+  else
+    # Install @playwright/test as a dev dep when not already present. Detect
+    # via package.json (devDeps OR deps) rather than running `npm ls` so an
+    # uninstalled lockfile state still triggers a clean install.
+    pw_already_dep=$(node -e '
+      try {
+        const p = JSON.parse(require("fs").readFileSync("package.json","utf8"));
+        const has = (p.devDependencies && p.devDependencies["@playwright/test"]) ||
+                    (p.dependencies && p.dependencies["@playwright/test"]);
+        process.stdout.write(has ? "1" : "0");
+      } catch (_) { process.stdout.write("0"); }
+    ')
+    if [ "$pw_already_dep" = "1" ]; then
+      echo "@playwright/test already declared in package.json — skipping npm install."
+    else
+      echo "Installing @playwright/test (npm install --save-dev @playwright/test)..."
+      if npm install --save-dev @playwright/test; then
+        echo "  Done."
+      else
+        echo "WARNING: 'npm install --save-dev @playwright/test' failed. Re-run manually after fixing the cause (often offline/registry/permissions)."
+      fi
+    fi
 
-Playwright harness scaffolded. To finish wiring:
+    # Install the chromium browser binary used by the harness. Idempotent —
+    # Playwright's installer no-ops when the matching version is already
+    # present. --with-deps pulls OS-level shared libs (Linux); on macOS it's
+    # a no-op for the deps part. Honor a separate skip flag so CI runners
+    # that pre-bake browsers can opt out.
+    if [ "${ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS:-0}" = "1" ]; then
+      echo "Skipped 'npx playwright install --with-deps chromium' (ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS=1)."
+    else
+      echo "Installing Chromium for Playwright (npx playwright install --with-deps chromium)..."
+      if npx --yes playwright install --with-deps chromium; then
+        echo "  Done."
+      else
+        echo "WARNING: 'npx playwright install --with-deps chromium' failed. Re-run manually before the first /architect on a UI REQ."
+      fi
+    fi
 
-  1. Install Playwright (one-time):
-       npm install --save-dev @playwright/test
-       npx playwright install --with-deps chromium
-
-  2. Add the test:e2e script to package.json `scripts`:
-       "test:e2e": "playwright test"
-
-  3. (Optional) Add a CI job that runs:
-       npm run test:e2e -- --project=sandbox
-
-The harness reads the target org from .adlc/config.yml `orgs.<project-name>`
-and auths via `sf org display`. NEVER inline credentials in any spec —
-test-auditor flags hardcoded passwords/tokens as Critical.
-EOF
+    # Add the test:e2e script to package.json without touching anything else.
+    # Use Node so we don't risk breaking JSON formatting or losing an existing
+    # scripts entry.
+    test_e2e_added=$(node -e '
+      const fs = require("fs");
+      const p = JSON.parse(fs.readFileSync("package.json","utf8"));
+      p.scripts = p.scripts || {};
+      if (p.scripts["test:e2e"]) { process.stdout.write("kept"); return; }
+      p.scripts["test:e2e"] = "playwright test";
+      fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+      process.stdout.write("added");
+    ')
+    if [ "$test_e2e_added" = "added" ]; then
+      echo "Added \"test:e2e\": \"playwright test\" to package.json scripts."
+    else
+      echo "Preserved existing \"test:e2e\" script in package.json."
+    fi
   fi
 fi
 ```
 
-After this step, the next `/architect` run on a UI-bearing REQ will land its required `tests/e2e/<feature>.spec.ts` in a project that already has a working runner.
+After this step, Playwright is installed (`@playwright/test` + chromium browser binary) and `npm run test:e2e` is wired up. The next `/architect` run on a UI-bearing REQ lands its required `tests/e2e/<feature>.spec.ts` into an immediately-runnable harness — no manual `npm install` follow-up needed. Set `ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1` to opt out of the npm install (e.g. offline init); set `ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS=1` to opt out of just the browser-binary download (e.g. CI runner with pre-baked browsers).
 
 ### Step 10.5: Register the project with the sprint dashboard & open it in Chrome
 
@@ -498,5 +544,5 @@ After this step, the user should see `<project-name>` listed at `http://127.0.0.
 1. Display the created directory structure
 2. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically)
 3. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo
-4. If the Playwright harness was scaffolded, remind the user to run `npm install --save-dev @playwright/test` and add the `test:e2e` script before the first `/proceed` on a UI REQ
+4. If the Playwright harness was scaffolded, confirm `npm run test:e2e` is wired (Step 10 installs `@playwright/test`, downloads chromium, and adds the script). If either install reported a WARNING, surface that line in the summary so the user can re-run it before the first `/architect` on a UI REQ.
 5. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists
