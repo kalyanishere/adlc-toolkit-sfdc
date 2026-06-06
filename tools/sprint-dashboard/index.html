@@ -99,6 +99,7 @@
   .pill.failed  { background: rgba(248,113,113,0.18); color: var(--failed); }
   .pill.merged  { background: rgba(52,211,153,0.18); color: var(--done); }
   .pill.idle    { background: rgba(139,148,167,0.18); color: var(--muted); }
+  .pill.schema  { background: rgba(251,191,36,0.18); color: var(--warn); margin-left: 0; cursor: help; }
   .req-body { padding: 12px 14px; display: grid; gap: 10px; }
   .phase-strip { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
   .phase {
@@ -372,11 +373,21 @@
       : '';
     const branch = req.integrationBranch ? `<span>Base <b>${escapeHtml(req.integrationBranch)}</b></span>` : '';
     const taskLine = req.currentTask ? `<span>Task <b>${escapeHtml(req.currentTask)}</b></span>` : '';
+
+    // Schema-violation pill — surfaces pipeline-runner output that
+    // doesn't match the documented schema (e.g. currentPhase as a
+    // string, missing completedPhases). The dashboard heals what it
+    // can but the violation itself is a bug worth seeing.
+    const schemaPill = (req.schemaViolations && req.schemaViolations.length)
+      ? `<span class="pill schema" title="${escapeHtml(req.schemaViolations.join(' • '))}">⚠ schema (${req.schemaViolations.length})</span>`
+      : '';
+
     return `
       <section class="req">
         <div class="req-head">
           <span class="req-id">${escapeHtml(req.reqId)}</span>
           <span class="req-title ${req.title ? '' : 'muted'}">${escapeHtml(req.title || '(no title)')}</span>
+          ${schemaPill}
           <span class="pill ${pill.cls}">${pill.label}</span>
         </div>
         <div class="req-body">

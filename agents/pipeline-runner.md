@@ -37,6 +37,19 @@ run via the Bash tool at the moment the value is needed. Do NOT type the timesta
 
 If the Bash command fails for any reason, halt the pipeline rather than guessing.
 
+## pipeline-state.json schema is strict
+
+Every write to `pipeline-state.json` MUST honor these types exactly. Loose typing here breaks the sprint dashboard's phase strip, the `/sprint` slim-mode `jq` projection, and Phase 5 reviewers — and the result is that a live pipeline looks "stuck" because its phase data is unparseable.
+
+- `currentPhase`: **integer 0..8**. NEVER write `"phase-3-validate-architecture"` or any string form. The integer is the schema; the descriptive label belongs in `phaseHistory[*].name`.
+- `completedPhases`: **array of integers**. ALWAYS present (never omit), even when empty. After each completed phase, append the integer phase number.
+- `phaseHistory[*].phase`: **integer 0..8**, same as `currentPhase`. NOT a string.
+- `phaseHistory[*].name`: **string**, the human-readable phase title (e.g. `"Create Worktree + Preflight"`, `"Validate Architecture & Tasks"`).
+- `phaseHistory[*].startedAt` / `completedAt`: ISO-8601 UTC strings from `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash (see "Timestamps come from the OS, never from you" above).
+- `completed`: **boolean**, set to `true` ONLY once Phase 8 (Wrapup) finishes.
+
+If you find yourself wanting to put a descriptive string into `currentPhase` "for clarity," stop — clarity belongs in `phaseHistory[*].name`. The number is what the dashboard renders.
+
 ## Worktree Isolation
 
 You operate inside an isolated worktree for the entire run. The path is set once in Step 0 (read from the launch prompt's `WORKTREE PATH (mandatory): ...` line, or derived as fallback) and written to `pipeline-state.json.repos[<id>].worktree`. From the moment Step 0 completes, that recorded path is immutable. Obey these rules:

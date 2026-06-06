@@ -187,6 +187,7 @@ function projectReqState(specDir) {
       integrationBranch: null,
       repos: {},
       tasks,
+      schemaViolations: [],
     };
   }
 
@@ -236,17 +237,75 @@ function projectReqState(specDir) {
     ? state.currentPhaseStartedAt
     : null;
 
+  // Schema-violation healing. The pipeline-runner is supposed to write
+  // currentPhase as a number 0..8 and completedPhases as an int array,
+  // but stray runs have written e.g. "phase-3-validate-architecture"
+  // and omitted completedPhases entirely. Without healing, the phase
+  // strip and the "Phase N / 8" line silently render nothing — which
+  // looks like a stalled pipeline. Coerce here, surface the violation
+  // alongside the data so the UI can flag it.
+  const schemaViolations = [];
+  let currentPhase = null;
+  if (typeof state.currentPhase === 'number' && Number.isInteger(state.currentPhase)) {
+    currentPhase = state.currentPhase;
+  } else if (typeof state.currentPhase === 'string') {
+    const m = state.currentPhase.match(/(\d+)/);
+    if (m) {
+      currentPhase = Number(m[1]);
+      schemaViolations.push(`currentPhase was string "${state.currentPhase}" — coerced to ${currentPhase}`);
+    } else {
+      schemaViolations.push(`currentPhase was string "${state.currentPhase}" with no numeric component`);
+    }
+  } else if (state.currentPhase != null) {
+    schemaViolations.push(`currentPhase had unexpected type ${typeof state.currentPhase}`);
+  }
+
+  // Helper: extract a phase index 0..8 from either a number or a string
+  // like "phase-3-validate-architecture". Returns null when no integer
+  // can be recovered.
+  const phaseIndex = (v) => {
+    if (Number.isInteger(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/(\d+)/);
+      if (m) return Number(m[1]);
+    }
+    return null;
+  };
+
+  let completedPhases;
+  if (Array.isArray(state.completedPhases)) {
+    completedPhases = state.completedPhases.filter((n) => Number.isInteger(n));
+  } else {
+    // Reconstruct from phaseHistory[*].phase as a best-effort fallback
+    // when the runner forgot to write completedPhases at all.
+    completedPhases = phaseHistory
+      .map((p) => (p ? phaseIndex(p.phase) : null))
+      .filter((n) => n != null);
+    if (state.completedPhases !== undefined) {
+      schemaViolations.push(`completedPhases had unexpected type ${typeof state.completedPhases}`);
+    } else if (completedPhases.length) {
+      schemaViolations.push(`completedPhases missing from state — reconstructed ${completedPhases.length} entry/entries from phaseHistory`);
+    }
+  }
+
+  // Per-phase activeMs sum needs the same string-tolerant reading.
+  // (The earlier loop already accepts string startedAt/completedAt; the
+  // p.phase coercion is purely informational here, but reconstructing
+  // completedPhases from string-form phaseHistory is the user-visible
+  // win — the phase strip lights up correctly even when the runner
+  // wrote bad shapes.)
+
   return {
     reqId,
     title,
     hasState: true,
-    currentPhase: state.currentPhase ?? null,
+    currentPhase,
     completed: !!state.completed,
     blockers: Array.isArray(state.blockers) ? state.blockers : [],
     currentTask: state.phase4?.currentTask || null,
     failedTasks: Array.isArray(state.phase4?.failedTasks) ? state.phase4.failedTasks : [],
     completedTasks: Array.isArray(state.phase4?.completedTasks) ? state.phase4.completedTasks : [],
-    completedPhases: Array.isArray(state.completedPhases) ? state.completedPhases : [],
+    completedPhases,
     lastPhase: phaseHistory.length ? phaseHistory[phaseHistory.length - 1] : null,
     startedAt: state.startedAt || null,
     lastActivityAt,
@@ -256,6 +315,7 @@ function projectReqState(specDir) {
     integrationBranch: state.integrationBranch || null,
     repos,
     tasks,
+    schemaViolations,
   };
 }
 

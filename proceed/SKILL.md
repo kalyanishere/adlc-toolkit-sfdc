@@ -129,7 +129,19 @@ Execute these phases in order. Each phase has a validation gate — if validatio
 
 **State file location**: `.adlc/specs/REQ-xxx-*/pipeline-state.json`
 
-**Schema**:
+**Schema rules — types are strict, follow them exactly**:
+
+- `currentPhase`: **integer 0..8** (NOT a string like `"phase-3-validate-architecture"`). Use the descriptive name in `phaseHistory[*].name` if you want a human-readable label.
+- `completedPhases`: **array of integers**. ALWAYS write it (never omit), even when empty. Append the integer phase number after each phase completes.
+- `phaseHistory[*].phase`: **integer 0..8**, matching `currentPhase`'s type. NOT a string.
+- `phaseHistory[*].name`: **string**, the human-readable phase title (e.g. `"Create Worktree + Preflight"`).
+- `phaseHistory[*].startedAt` / `completedAt`: ISO-8601 UTC strings, sourced from `date -u +"%Y-%m-%dT%H:%M:%SZ"` (see Gate Protocol — Timestamps come from the OS).
+- `completed`: **boolean**, true ONLY when Phase 8 (Wrapup) finishes.
+- `startedAt` / `currentPhaseStartedAt`: ISO-8601 UTC strings; `currentPhaseStartedAt` is `null` once `completed` is `true`.
+
+These types are what the sprint dashboard, slim-mode `jq` projection in `/sprint`, and Phase 5 reviewers all depend on. Writing strings where numbers are required, or omitting `completedPhases`, breaks the dashboard's phase strip and makes a live pipeline look stalled. The dashboard heals what it can but surfaces a `⚠ schema` pill — treat any such pill as a runner bug.
+
+**Schema example**:
 ```json
 {
   "req": "REQ-xxx",
