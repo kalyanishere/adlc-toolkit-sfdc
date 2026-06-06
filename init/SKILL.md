@@ -23,6 +23,32 @@ Target: $ARGUMENTS
 2. If no argument, use the current working directory
 3. Check if `.adlc/` already exists — if so, report what's already there and ask if the user wants to reinitialize or fill gaps
 
+### Step 1.5: Ensure the Target Directory is a Git Repo
+
+The whole ADLC pipeline assumes a working git repo: `/proceed` Step 0 runs `git worktree add`, every phase commits, `/wrapup` opens PRs. Initializing `.adlc/` inside a non-git directory ships a project that cannot proceed past `/spec`. Treat git as a precondition: if the directory isn't a git repo, **`git init` it locally by default** — assume a remote will be wired in later.
+
+```bash
+# Detect git status. We use `git rev-parse --git-dir` rather than `[ -d .git ]`
+# because a worktree's .git is a file, not a directory, and a parent-tracked
+# subdirectory shouldn't get its own re-init.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "Target is already inside a git repo — skipping git init."
+else
+  echo "No git repo detected at target. Initializing one locally..."
+  # Default branch: prefer the user's configured init.defaultBranch, else
+  # `main` (matches GitHub's default since 2020 and what /proceed expects
+  # when .adlc/config.yml does not declare a different integration branch).
+  default_branch=$(git config --global --get init.defaultBranch 2>/dev/null || true)
+  default_branch=${default_branch:-main}
+  git init -b "$default_branch"
+  echo "Initialized git repo on branch '$default_branch'. A remote can be wired in later via:"
+  echo "  git remote add origin <url>"
+  echo "  git push -u origin $default_branch"
+fi
+```
+
+This step is idempotent and never destructive — it only runs `git init` when there is no existing git context, and never touches an existing one. After this step every subsequent step can safely assume a working `.git/` and a sane default branch.
+
 ### Step 2: Gather Project Context
 Ask the user for the following (skip any that are already known from existing files):
 1. **Project name** — What is this project called?
@@ -541,7 +567,7 @@ fi
 After this step, the user should see `<project-name>` listed at `http://127.0.0.1:5174` (default port; override with `ADLC_DASHBOARD_PORT`). The server picks up the new entry from the registry on its next ~1.5s poll, so even when the launcher reports "already running", the project shows up within seconds.
 
 ### Step 11: Summary
-1. Display the created directory structure
+1. Display the created directory structure. If Step 1.5 ran `git init` (the directory was not previously a git repo), call that out so the user knows a local git context now exists and remind them to wire in a remote when they're ready (`git remote add origin <url>`).
 2. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically)
 3. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo
 4. If the Playwright harness was scaffolded, confirm `npm run test:e2e` is wired (Step 10 installs `@playwright/test`, downloads chromium, and adds the script). If either install reported a WARNING, surface that line in the summary so the user can re-run it before the first `/architect` on a UI REQ.
