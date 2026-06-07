@@ -17,6 +17,10 @@ const PORT_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.port');
 const URL_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.url');
 const LOG_FILE = path.join(HOME_RUNTIME, 'sprint-dashboard.log');
 const REGISTRY_FILE = path.join(HOME, '.adlc', 'dashboard-registry.json');
+// JSONL written by Stop / UserPromptSubmit hooks (one event per turn
+// boundary, per Claude Code session). Aggregated below to compute
+// user-wait idle time at session, project, and REQ granularities.
+const USER_WAIT_LOG = path.join(HOME_RUNTIME, 'user-wait.jsonl');
 
 const PORT = parseInt(process.env.ADLC_DASHBOARD_PORT || '5174', 10);
 const HOST = '127.0.0.1';
@@ -374,6 +378,164 @@ function projectReqState(specDir) {
   };
 }
 
+// =============================================================================
+// User-wait tracking
+// =============================================================================
+//
+// The Stop / UserPromptSubmit hooks (templates/claude-settings-template.json)
+// append one JSONL event per turn boundary, e.g.:
+//   {"ts":"2026-06-07T14:02:11Z","kind":"stop","session":"abc","cwd":"/repo"}
+//   {"ts":"2026-06-07T14:18:44Z","kind":"submit","session":"abc","cwd":"/repo"}
+//
+// We tail the file incrementally (track byte offset) and accumulate per-session
+// idle time. A "session" idle epoch starts at a `stop` and ends at the next
+// `submit` for the same session id; the delta is added to that session's
+// totalIdleMs. Sessions still in stop at snapshot time contribute a live
+// `currentlyWaitingMs = now - lastStopAt`.
+//
+// Each session is also attributed to:
+//   - a registered project root (via cwd prefix match), or null if none
+//   - a REQ id, when the cwd lives under <root>/.worktrees/<branch>/...
+//     where <branch> contains a REQ id (best-effort, regex-based)
+//
+// Both attributions are recomputed every snapshot — a session's cwd never
+// actually changes (Claude Code processes don't chdir between turns), but
+// new sessions arrive constantly so it's cheaper to recompute than invalidate.
+
+const userWaitBySession = new Map();
+let userWaitOffset = 0;
+
+function ingestUserWaitLog() {
+  let stat;
+  try { stat = fs.statSync(USER_WAIT_LOG); } catch (_) { return; }
+  // File rotated/truncated → reset cursor to start of (now smaller) file.
+  if (stat.size < userWaitOffset) userWaitOffset = 0;
+  if (stat.size === userWaitOffset) return;
+
+  let buf;
+  try {
+    const fd = fs.openSync(USER_WAIT_LOG, 'r');
+    buf = Buffer.alloc(stat.size - userWaitOffset);
+    fs.readSync(fd, buf, 0, buf.length, userWaitOffset);
+    fs.closeSync(fd);
+  } catch (_) { return; }
+  userWaitOffset = stat.size;
+
+  for (const line of buf.toString('utf8').split('\n')) {
+    if (!line) continue;
+    let ev;
+    try { ev = JSON.parse(line); } catch (_) { continue; }
+    if (!ev || typeof ev.session !== 'string' || typeof ev.kind !== 'string') continue;
+    const tsMs = Date.parse(ev.ts);
+    if (!Number.isFinite(tsMs)) continue;
+    let s = userWaitBySession.get(ev.session);
+    if (!s) {
+      s = {
+        cwd: ev.cwd || '',
+        firstSeenAt: tsMs,
+        lastEventAt: tsMs,
+        lastStopAt: null,
+        totalIdleMs: 0,
+        turnCount: 0,
+      };
+      userWaitBySession.set(ev.session, s);
+    }
+    if (ev.cwd && !s.cwd) s.cwd = ev.cwd;
+    s.lastEventAt = tsMs;
+    if (ev.kind === 'stop') {
+      // First stop after a submit (or initial stop) opens a wait window.
+      // Two stops in a row (interrupt-style) keep the EARLIEST as the
+      // start so a user who Esc'd during a tool call still gets full credit
+      // for their think time.
+      if (!s.lastStopAt) s.lastStopAt = tsMs;
+    } else if (ev.kind === 'submit') {
+      if (s.lastStopAt) {
+        s.totalIdleMs += Math.max(0, tsMs - s.lastStopAt);
+        s.lastStopAt = null;
+      }
+      s.turnCount++;
+    }
+  }
+}
+
+// Extract a REQ id from a worktree path. Worktrees live at
+// <root>/.worktrees/<branch>/... and the branch name typically embeds the
+// REQ id, e.g. .worktrees/feat/SAT-REQ-006-foo/. Returns null when the cwd
+// isn't a worktree path or no REQ id is recoverable.
+function reqIdFromCwd(cwd) {
+  if (!cwd) return null;
+  const wtIdx = cwd.indexOf(`${path.sep}.worktrees${path.sep}`);
+  if (wtIdx < 0) return null;
+  const after = cwd.slice(wtIdx + `${path.sep}.worktrees${path.sep}`.length);
+  const m = after.match(/((?:[A-Z]+-)?REQ-\d+)/);
+  return m ? m[1] : null;
+}
+
+// Map a session's cwd onto the registered project root it belongs to.
+// Worktree sessions (cwd = <root>/.worktrees/<branch>/...) attribute back
+// to <root>. Returns null if no registered project matches.
+function attributeToRoot(cwd, roots) {
+  if (!cwd) return null;
+  for (const r of roots) {
+    if (cwd === r.path || cwd.startsWith(r.path + path.sep)) return r.path;
+  }
+  return null;
+}
+
+// Aggregate user-wait totals across all sessions attributed to this root.
+// Returns a per-project summary plus a map of REQ-id → per-REQ summary so
+// the dashboard can surface idle time at the REQ card level.
+function userWaitFor(rootPath, nowMs) {
+  let totalMs = 0;
+  let waitingMs = 0;
+  let waitingSessions = 0;
+  let activeSessions = 0;
+  let totalTurns = 0;
+  const byReq = {};
+  for (const [sid, s] of userWaitBySession) {
+    if (s._rootCache !== rootPath) continue;
+    activeSessions++;
+    totalMs += s.totalIdleMs;
+    totalTurns += s.turnCount;
+    let liveMs = 0;
+    if (s.lastStopAt) {
+      liveMs = Math.max(0, nowMs - s.lastStopAt);
+      waitingMs += liveMs;
+      waitingSessions++;
+    }
+    const reqId = s._reqCache;
+    if (reqId) {
+      const slot = byReq[reqId] || (byReq[reqId] = {
+        totalMs: 0, waitingMs: 0, waitingSessions: 0, turns: 0,
+      });
+      slot.totalMs += s.totalIdleMs;
+      slot.turns += s.turnCount;
+      if (liveMs) {
+        slot.waitingMs += liveMs;
+        slot.waitingSessions++;
+      }
+    }
+  }
+  // Convert per-REQ totals to seconds for the wire payload.
+  const reqs = {};
+  for (const [reqId, v] of Object.entries(byReq)) {
+    reqs[reqId] = {
+      totalSec: Math.floor(v.totalMs / 1000),
+      waitingSec: Math.floor(v.waitingMs / 1000),
+      waitingSessions: v.waitingSessions,
+      turns: v.turns,
+    };
+  }
+  return {
+    totalSec: Math.floor(totalMs / 1000),
+    waitingSec: Math.floor(waitingMs / 1000),
+    waitingSessions,
+    activeSessions,
+    turns: totalTurns,
+    byReq: reqs,
+  };
+}
+
 function snapshotProject(root) {
   // Collect spec dirs from both the main checkout (post-merge state files)
   // and every active worktree (in-flight state files written by /proceed
@@ -412,9 +574,33 @@ function snapshotProject(root) {
 }
 
 function snapshot() {
+  ingestUserWaitLog();
   const roots = readRegistry();
+  // Cache per-session attribution once per snapshot. Cheap: each cache
+  // entry is two prefix lookups + one regex against a short string.
+  for (const s of userWaitBySession.values()) {
+    s._rootCache = attributeToRoot(s.cwd, roots);
+    s._reqCache = reqIdFromCwd(s.cwd);
+  }
+  const nowMs = Date.now();
   const projects = roots.map(snapshotProject)
-    .filter((p) => p.exists);
+    .filter((p) => p.exists)
+    .map((p) => {
+      const userWait = userWaitFor(p.path, nowMs);
+      // Stitch per-REQ user-wait into each REQ entry. REQs with no
+      // worktree-attributed sessions get a zero-valued shape so the UI
+      // can render uniformly without null-checks.
+      const reqs = p.reqs.map((r) => ({
+        ...r,
+        userWait: userWait.byReq[r.reqId] || {
+          totalSec: 0, waitingSec: 0, waitingSessions: 0, turns: 0,
+        },
+      }));
+      // Strip the byReq map from the project-level rollup so the wire
+      // payload doesn't repeat the per-REQ data twice.
+      const { byReq: _drop, ...projectRollup } = userWait;
+      return { ...p, reqs, userWait: projectRollup };
+    });
   projects.sort((a, b) => a.name.localeCompare(b.name));
   return {
     generatedAt: new Date().toISOString(),

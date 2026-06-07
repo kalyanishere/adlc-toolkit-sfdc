@@ -42,15 +42,35 @@ The prefix is preserved in the displayed REQ id so `SAT-REQ-010` stays distinct 
 
 ## Telemetry pills
 
-Each REQ card surfaces three time metrics:
+Each REQ card surfaces these time metrics:
 
 | Pill                  | Source                                            | What it tells you                                                                  |
 | --------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | **Duration**          | `state.startedAt → now`                           | Wall-clock since the pipeline first ran. Includes idle gaps and pickup delays.     |
 | **Active**            | `Σ (phase.completedAt − phase.startedAt)` + in-flight `(now − currentPhaseStartedAt)` | Real per-phase execution time. Excludes idle gaps. |
 | **Last completion**   | `now − max(phaseHistory[*].completedAt)`          | How long since the most recent phase *finished*. Climbs during slow phases or stalls. |
+| **User wait**         | Σ across `Stop → UserPromptSubmit` hook events attributed to this REQ's worktree session(s) | Cumulative time you spent at the prompt thinking before the next message. Live counter when a session is currently waiting. |
 
 Reading the gap between **Duration** and **Active** is the quickest way to spot a pipeline that ran briefly and then sat waiting (large Duration, small Active = pickup delay). For state files written before per-phase telemetry was added, **Active** falls back to a rough `startedAt → lastActivityAt` approximation and the tooltip says so.
+
+A project-level **summary bar** appears above the REQ list when any user-wait data has accrued — it shows cumulative wait across every session attributed to the project, plus a live `+Ns live (N session)` indicator that pulses while you're at the prompt.
+
+### How User wait is captured
+
+Two Claude Code hooks (added by `/init` to `.claude/settings.json`) append one JSONL event per turn boundary to `~/.adlc/runtime/user-wait.jsonl`:
+
+```jsonl
+{"ts":"2026-06-07T14:02:11Z","kind":"stop","session":"abc","cwd":"/repo/.worktrees/feat/SAT-REQ-006-foo"}
+{"ts":"2026-06-07T14:18:44Z","kind":"submit","session":"abc","cwd":"/repo/.worktrees/feat/SAT-REQ-006-foo"}
+```
+
+The dashboard tails this log incrementally (byte-offset cursor; survives log rotation), groups events by `session`, and computes idle as `Σ (submit.ts − preceding stop.ts)`. Each session is attributed to:
+- a **project**, via `cwd` prefix match against the registry
+- a **REQ**, when `cwd` matches `<root>/.worktrees/<branch>/...` and the branch name embeds a REQ id
+
+Sessions in non-worktree directories (e.g., editing the main checkout) still count toward the project rollup but don't attach to any single REQ.
+
+**Caveats**: tool-permission prompts that block waiting for user approval are NOT captured (no public hook fires for them yet — run with `bypassPermissions` to avoid this gap, or accept it). Subagents share the parent's session id and don't fire their own turn boundaries, so `/sprint` running parallel REQs only attributes wait time correctly when each REQ is its own Claude Code process.
 
 The schema fields powering this:
 

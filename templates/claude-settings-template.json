@@ -88,5 +88,30 @@
     ],
     "ask": [
     ]
+  },
+  "_hooks_comment": "Stop / UserPromptSubmit hooks emit one JSONL event per turn boundary to ~/.adlc/runtime/user-wait.jsonl. The sprint dashboard tails this log to compute per-session/per-project/per-REQ user-wait time (the gap between Claude finishing a turn and you submitting the next prompt). No third-party deps; uses POSIX date and a single appendFile per event. Works inside git worktrees (CLAUDE_PROJECT_DIR is set per-session by Claude Code).",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.adlc/runtime && printf '{\"ts\":\"%s\",\"kind\":\"stop\",\"session\":\"%s\",\"cwd\":\"%s\"}\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"${CLAUDE_SESSION_ID:-unknown}\" \"${CLAUDE_PROJECT_DIR:-$PWD}\" >> ~/.adlc/runtime/user-wait.jsonl"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.adlc/runtime && printf '{\"ts\":\"%s\",\"kind\":\"submit\",\"session\":\"%s\",\"cwd\":\"%s\"}\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"${CLAUDE_SESSION_ID:-unknown}\" \"${CLAUDE_PROJECT_DIR:-$PWD}\" >> ~/.adlc/runtime/user-wait.jsonl"
+          }
+        ]
+      }
+    ]
   }
 }

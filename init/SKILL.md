@@ -343,7 +343,35 @@ fi
 
 The template pre-approves the routine `git`, `gh`, `npm`, Read/Write/Edit, and agent-dispatch operations the ADLC pipeline fires. Destructive operations (`rm -rf`, `git reset --hard`, `gh pr merge`, `./deploy.sh`, `terraform apply/destroy`, force-push to `main`) remain on the **ask** list so a human still confirms the one-way moves. Customize for project-specific commands (e.g., add `Bash(cd app && ./deploy.sh:*)` for iOS deploys) by editing `.claude/settings.json` directly.
 
-Advise the user: "`.claude/settings.json` was scaffolded with a default allowlist. Commit this file — it is team-shared. Use `.claude/settings.local.json` (gitignored by Claude Code) for personal overrides."
+The template also wires two Claude Code hooks (`Stop` and `UserPromptSubmit`) that emit one JSONL event per turn boundary to `~/.adlc/runtime/user-wait.jsonl`. The sprint dashboard tails this log to compute per-REQ "user wait" idle time (gap between Claude finishing a turn and you submitting the next prompt). Zero overhead when the dashboard isn't running — the file is just append-only JSONL.
+
+Advise the user: "`.claude/settings.json` was scaffolded with a default allowlist plus user-wait hooks. Commit this file — it is team-shared. Use `.claude/settings.local.json` (gitignored by Claude Code) for personal overrides."
+
+### Step 8.5: Backfill user-wait hooks into pre-existing settings
+
+When `.claude/settings.json` already existed (Step 8 preserved it), it may pre-date the user-wait hooks added in this version of the template. Detect that case and merge in just the hook block — never overwrite the user's allowlist customizations.
+
+```bash
+if [ -f .claude/settings.json ] && ! grep -q '"UserPromptSubmit"' .claude/settings.json; then
+  echo "Backfilling user-wait hooks into existing .claude/settings.json..."
+  node -e '
+    const fs = require("fs");
+    const file = ".claude/settings.json";
+    const cur = JSON.parse(fs.readFileSync(file, "utf8"));
+    cur.hooks = cur.hooks || {};
+    const stopCmd = "mkdir -p ~/.adlc/runtime && printf \x27{\\\"ts\\\":\\\"%s\\\",\\\"kind\\\":\\\"stop\\\",\\\"session\\\":\\\"%s\\\",\\\"cwd\\\":\\\"%s\\\"}\\\\n\x27 \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"${CLAUDE_SESSION_ID:-unknown}\" \"${CLAUDE_PROJECT_DIR:-$PWD}\" >> ~/.adlc/runtime/user-wait.jsonl";
+    const submitCmd = stopCmd.replace("\\\"kind\\\":\\\"stop\\\"", "\\\"kind\\\":\\\"submit\\\"");
+    cur.hooks.Stop = cur.hooks.Stop || [];
+    cur.hooks.UserPromptSubmit = cur.hooks.UserPromptSubmit || [];
+    cur.hooks.Stop.push({matcher:"*", hooks:[{type:"command", command:stopCmd}]});
+    cur.hooks.UserPromptSubmit.push({matcher:"*", hooks:[{type:"command", command:submitCmd}]});
+    fs.writeFileSync(file, JSON.stringify(cur, null, 2) + "\n");
+    console.log("OK: appended Stop + UserPromptSubmit hooks");
+  '
+fi
+```
+
+This step is safe to re-run: the `grep -q '"UserPromptSubmit"'` guard skips when the hooks are already present. If the user has hand-customized hooks in another shape, the merge will append rather than replace — verify with `cat .claude/settings.json` afterward.
 
 ### Step 9: Scaffold `.adlc/config.yml` and set `project.shortname`
 

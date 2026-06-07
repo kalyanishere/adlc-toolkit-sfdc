@@ -103,6 +103,22 @@
   .pill.failed  { background: rgba(248,113,113,0.18); color: var(--failed); }
   .pill.merged  { background: rgba(52,211,153,0.18); color: var(--done); }
   .pill.idle    { background: rgba(139,148,167,0.18); color: var(--muted); }
+  .pill.waiting {
+    background: rgba(251,191,36,0.18); color: var(--warn);
+    animation: pulse-warn 2s ease-in-out infinite;
+  }
+  .pill.userwait { background: rgba(167,139,250,0.18); color: #c4b5fd; }
+  @keyframes pulse-warn {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(251,191,36,0.30); }
+    50%      { box-shadow: 0 0 0 4px rgba(251,191,36,0.00); }
+  }
+  .project-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 12px;
+  }
+  .project-bar .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .project-bar .pill { margin-left: 0; }
   .pill.stalled {
     background: rgba(248,113,113,0.18); color: var(--bad);
     margin-left: 0; cursor: help;
@@ -276,6 +292,16 @@
     return fmtSpan(b - a);
   }
 
+  // fmtSec — like fmtSpan but accepts seconds. Used for user-wait totals
+  // which the server emits as integer seconds. Returns '0s' (not '<1m')
+  // for sub-minute values so per-REQ counters don't visually jump
+  // straight from blank to "<1m" on the first turn boundary.
+  function fmtSec(sec) {
+    if (!Number.isFinite(sec) || sec <= 0) return '0s';
+    if (sec < 60) return sec + 's';
+    return fmtSpan(sec * 1000);
+  }
+
   function statePill(req) {
     if (req.completed) return { cls: 'merged', label: 'merged' };
     if (req.blockers && req.blockers.length) return { cls: 'blocked', label: 'blocked' };
@@ -403,6 +429,20 @@
     const branch = req.integrationBranch ? `<span>Base <b>${escapeHtml(req.integrationBranch)}</b></span>` : '';
     const taskLine = req.currentTask ? `<span>Task <b>${escapeHtml(req.currentTask)}</b></span>` : '';
 
+    // User wait: cumulative time the user spent thinking before submitting
+    // their next prompt within this REQ's worktree session(s). Server
+    // attributes Stop/UserPromptSubmit hook events to a REQ when the
+    // session cwd lives under <root>/.worktrees/<branch>/ and the branch
+    // embeds the REQ id. Hidden when nothing has accrued AND nobody is
+    // currently waiting — keeps non-worktree REQs (e.g. spec-only) clean.
+    const uw = req.userWait || { totalSec: 0, waitingSec: 0, waitingSessions: 0, turns: 0 };
+    const liveWait = uw.waitingSessions > 0
+      ? ` <b>+${fmtSec(uw.waitingSec)}</b> live`
+      : '';
+    const userWaitLine = (uw.totalSec > 0 || uw.waitingSessions > 0)
+      ? `<span title="Time the user spent at the prompt within this REQ's worktree session(s). Stops accruing when you submit; resumes when the assistant finishes its next turn. Across ${uw.turns} turn${uw.turns === 1 ? '' : 's'}.">⏸ User wait <b>${fmtSec(uw.totalSec)}</b>${liveWait}</span>`
+      : '';
+
     // Stalled pipeline detection. The server flags req.stalled when no
     // phase has completed and no new phase has started for longer than
     // ADLC_DASHBOARD_STALL_SECONDS (default 5 min). Surface a pulsing
@@ -424,7 +464,7 @@
         </div>
         <div class="req-body">
           ${renderPhases(req, labels)}
-          <div class="meta-row">${phaseLine}${dur}${active}${idle}${last}${branch}${taskLine}</div>
+          <div class="meta-row">${phaseLine}${dur}${active}${idle}${last}${branch}${taskLine}${userWaitLine}</div>
           ${renderRepos(req)}
           ${renderTasks(req)}
           ${renderBlockers(req)}
@@ -476,11 +516,36 @@
     renderProjectPicker(projects, active.name);
     rootPathEl.textContent = active.path || '';
 
+    const summary = renderProjectSummary(active);
     if (!active.reqs || !active.reqs.length) {
-      main.innerHTML = `<div class="empty">No REQs found in <b>${escapeHtml(active.name)}</b> under <code>.adlc/specs/</code>.</div>`;
+      main.innerHTML = `${summary}<div class="empty">No REQs found in <b>${escapeHtml(active.name)}</b> under <code>.adlc/specs/</code>.</div>`;
       return;
     }
-    main.innerHTML = active.reqs.map((r) => renderReq(r, labels)).join('');
+    main.innerHTML = summary + active.reqs.map((r) => renderReq(r, labels)).join('');
+  }
+
+  // Project-level summary bar above the REQ cards. Shows cumulative
+  // user-wait across every Claude Code session attributed to this
+  // project (worktree or main checkout) plus any in-flight wait. Hidden
+  // entirely when no hook events have arrived yet — keeps the dashboard
+  // clean for projects whose users haven't enabled hooks.
+  function renderProjectSummary(project) {
+    const uw = project.userWait;
+    if (!uw) return '';
+    const hasData = uw.totalSec > 0 || uw.activeSessions > 0;
+    if (!hasData) return '';
+    const liveBit = uw.waitingSessions > 0
+      ? `<span class="pill waiting" title="A Claude Code session is currently waiting for your input. Live counter; advances each second.">⏸ +${fmtSec(uw.waitingSec)} live (${uw.waitingSessions} session${uw.waitingSessions === 1 ? '' : 's'})</span>`
+      : '';
+    return `
+      <section class="project-bar">
+        <span class="label">Project</span>
+        <b>${escapeHtml(project.name)}</b>
+        <span class="pill userwait" title="Cumulative user-wait time across all sessions attributed to this project. Click any REQ for per-REQ breakdown.">⏸ User wait <b>${fmtSec(uw.totalSec)}</b> across ${uw.turns} turn${uw.turns === 1 ? '' : 's'}</span>
+        ${liveBit}
+        <span class="label" style="margin-left:auto">${uw.activeSessions} session${uw.activeSessions === 1 ? '' : 's'} tracked</span>
+      </section>
+    `;
   }
 
   function setConn(state, label) {
@@ -506,6 +571,8 @@
   }
 
   // Re-render every 30s so duration counters keep ticking even between SSE pushes.
+  // (The server-driven user-wait `+Ns live` counter is refreshed every ~1.5s by SSE
+  // because `waitingSec` advances on every snapshot whenever a session is waiting.)
   setInterval(() => {
     if (window.__lastSnap) render(window.__lastSnap);
   }, 30000);
