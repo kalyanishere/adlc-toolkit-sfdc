@@ -27,19 +27,37 @@
     font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
   header {
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 14px; background: var(--panel);
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+    row-gap: 8px; background: var(--panel);
     position: sticky; top: 0; z-index: 10;
   }
-  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
-  header .meta { color: var(--muted); font-size: 12px; }
-  header .project-picker { display: flex; align-items: center; gap: 6px; }
-  header .project-picker label { color: var(--muted); font-size: 11px; }
+  /* Two header groups so flex-wrap behaves predictably and the right-aligned
+     controls stay together when the row wraps. .header-left holds the title,
+     project picker, and path; .header-right holds refresh + clock + conn.
+     Each group is a flex container that wraps internally on narrow widths. */
+  header .header-left, header .header-right {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    min-width: 0;
+  }
+  header .header-left { flex: 1 1 360px; min-width: 0; }
+  header .header-right { flex: 0 1 auto; margin-left: auto; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
+  header .meta { color: var(--muted); font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0; flex: 1 1 0; }
+  header .project-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  header .project-picker label { color: var(--muted); font-size: 11px; white-space: nowrap; }
   header .project-picker select {
     background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
     border-radius: 6px; padding: 4px 26px 4px 10px; font-size: 12px;
     font: inherit; font-size: 12px;
-    cursor: pointer; outline: none; min-width: 180px;
+    cursor: pointer; outline: none;
+    /* Allow the picker to shrink with the viewport instead of forcing
+       the rest of the header off-screen. min-width:0 lets flexbox honor
+       the shrink; max-width caps it on roomy viewports. */
+    min-width: 0; flex: 0 1 280px; max-width: 280px;
+    text-overflow: ellipsis;
     appearance: none; -webkit-appearance: none;
     background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
                       linear-gradient(135deg, var(--muted) 50%, transparent 50%);
@@ -52,7 +70,7 @@
   header .refresh {
     background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
     border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px;
-    cursor: pointer; user-select: none;
+    cursor: pointer; user-select: none; white-space: nowrap;
   }
   header .refresh:hover { color: var(--fg); border-color: rgba(96,165,250,0.45); }
   header .refresh:active { background: var(--bg); }
@@ -60,8 +78,8 @@
   header .refresh .spin { display: inline-block; transform-origin: center; }
   header .refresh.loading .spin { animation: spin 0.8s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-  header .conn { margin-left: auto; font-size: 11px; color: var(--muted); }
-  header .meta-right { font-size: 11px; color: var(--muted); }
+  header .conn { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  header .meta-right { font-size: 11px; color: var(--muted); white-space: nowrap; }
   header .conn.live::before {
     content: ""; display: inline-block; width: 7px; height: 7px;
     border-radius: 50%; background: var(--ok); margin-right: 6px;
@@ -70,6 +88,20 @@
   header .conn.dead::before {
     content: ""; display: inline-block; width: 7px; height: 7px;
     border-radius: 50%; background: var(--bad); margin-right: 6px;
+  }
+  /* Tablet / narrow desktop: drop the long root path before it forces a wrap. */
+  @media (max-width: 900px) {
+    header .meta { display: none; }
+  }
+  /* Phone-ish: stack the right-side controls on their own row, drop the
+     refresh-button label, and shrink h1 + dropdown so everything fits. */
+  @media (max-width: 640px) {
+    header { padding: 10px 12px; gap: 8px 10px; }
+    header h1 { font-size: 14px; }
+    header .header-right { margin-left: 0; width: 100%; justify-content: flex-end; }
+    header .project-picker select { flex: 1 1 100%; max-width: none; }
+    header .refresh-label { display: none; }       /* Keep the spinner glyph; lose the word "Refresh". */
+    header .meta-right { display: none; }          /* "updated HH:MM:SS" is redundant with the conn pill on phones. */
   }
   main { padding: 18px; display: grid; gap: 14px; }
   .empty {
@@ -140,6 +172,14 @@
   }
   .req-body { padding: 12px 14px; display: grid; gap: 10px; }
   .phase-strip { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
+  /* On narrow viewports the 9-column phase strip becomes unreadable — let
+     it wrap to 2 rows of larger cells instead of squeezing into illegible
+     2-char columns. */
+  @media (max-width: 640px) {
+    .phase-strip { grid-template-columns: repeat(5, 1fr); }
+    .req-head { flex-wrap: wrap; gap: 8px; }
+    main { padding: 12px; }
+  }
   .phase {
     padding: 5px 6px; font-size: 10px; border-radius: 4px;
     background: var(--panel-2); color: var(--muted); text-align: center;
@@ -189,17 +229,21 @@
 </head>
 <body>
 <header>
-  <h1>ADLC Sprint Dashboard</h1>
-  <div class="project-picker" id="picker" hidden>
-    <label for="project-select">Project</label>
-    <select id="project-select"></select>
+  <div class="header-left">
+    <h1>ADLC Sprint Dashboard</h1>
+    <div class="project-picker" id="picker" hidden>
+      <label for="project-select">Project</label>
+      <select id="project-select"></select>
+    </div>
+    <span class="meta" id="root-path" title="">…</span>
   </div>
-  <span class="meta" id="root-path">…</span>
-  <button class="refresh" id="refresh" type="button" title="Force refresh from /api/state. Auto-refresh runs every ~1.5s via SSE.">
-    <span class="spin">⟳</span> Refresh
-  </button>
-  <span class="meta-right" id="last-updated"></span>
-  <span class="conn dead" id="conn">connecting</span>
+  <div class="header-right">
+    <button class="refresh" id="refresh" type="button" title="Force refresh from /api/state. Auto-refresh runs every ~1.5s via SSE.">
+      <span class="spin">⟳</span><span class="refresh-label"> Refresh</span>
+    </button>
+    <span class="meta-right" id="last-updated"></span>
+    <span class="conn dead" id="conn">connecting</span>
+  </div>
 </header>
 <main id="main">
   <div class="empty">Waiting for state…</div>
@@ -515,6 +559,7 @@
 
     renderProjectPicker(projects, active.name);
     rootPathEl.textContent = active.path || '';
+    rootPathEl.title = active.path || '';   // Full path on hover when CSS truncates it.
 
     const summary = renderProjectSummary(active);
     if (!active.reqs || !active.reqs.length) {
