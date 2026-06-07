@@ -705,11 +705,27 @@
       if (ms > 0) reqsWithExec++;
       execMs += ms;
     }
-    const userWaitMs = (uw.totalSec || 0) * 1000 + (uw.waitingSec || 0) * 1000;
-    // "Total time" is execution + user wait — the wall-clock cost of moving
-    // every REQ in this project, regardless of who/what was the bottleneck.
-    // This is the metric the user asked for: how much elapsed time has the
-    // project consumed end-to-end across pipelines and user-input gaps.
+    // User-wait math:
+    //   uw.totalSec   = sum of CLOSED wait windows (Stop → next Submit). This
+    //                   represents historical, accounted-for user idle time.
+    //   uw.waitingSec = the CURRENTLY-OPEN wait window (Stop with no Submit
+    //                   yet). It's the live "+Ns waiting" counter on the
+    //                   right of the project bar.
+    //
+    // Total elapsed must NOT add waitingSec — that's a live counter that
+    // gets folded into totalSec the moment the user submits their next
+    // prompt. Adding it now would double-count the same wait window once
+    // it closes, AND inflate Total beyond reality while the user sits at
+    // the prompt (e.g., walk away for 2h → Total appears to balloon by
+    // 2h even though no work is happening).
+    //
+    // The waitingSec live counter is surfaced separately via the
+    // `⏸ +Ns live` pill on the right; the user can see at a glance that
+    // there's an open wait window without it polluting Total.
+    const userWaitMs = (uw.totalSec || 0) * 1000;
+    // "Total time" is closed-execution + closed-user-wait — the wall-clock
+    // cost of moving every REQ in this project end-to-end. Excludes any
+    // currently-open user-wait window (shown live in the +Ns live pill).
     const totalMs = execMs + userWaitMs;
 
     const hasUserWaitData = uw.totalSec > 0 || uw.activeSessions > 0;
@@ -726,7 +742,7 @@
       ? `<span class="pill running" title="Cumulative pipeline execution time across every REQ — the sum of per-phase active spans. Excludes idle gaps between phases and user wait.">⚡ Exec <b>${fmtSpan(execMs)}</b> across ${reqsWithExec} REQ${reqsWithExec === 1 ? '' : 's'}</span>`
       : '';
     const totalBit = (hasUserWaitData && hasExecData)
-      ? `<span class="pill stale" title="Total time = pipeline execution + user wait. The wall-clock cost of moving every REQ in this project end-to-end (includes ${fmtSpan(execMs)} exec + ${fmtSec(uw.totalSec)} user wait${uw.waitingSessions > 0 ? ` + ${fmtSec(uw.waitingSec)} live wait` : ''}).">⏱ Total <b>${fmtSpan(totalMs)}</b></span>`
+      ? `<span class="pill stale" title="Total = pipeline execution + closed user-wait windows. The wall-clock cost of moving every REQ in this project end-to-end. Excludes any currently-open wait window (shown live in the right-side pill).&#10;Breakdown: ${fmtSpan(execMs)} exec + ${fmtSec(uw.totalSec)} user wait${uw.waitingSessions > 0 ? ` (currently +${fmtSec(uw.waitingSec)} more in an open window — not yet counted)` : ''}.">⏱ Total <b>${fmtSpan(totalMs)}</b></span>`
       : '';
 
     const sessionLabel = uw.activeSessions
