@@ -83,14 +83,31 @@ if [ "$SKIP_REGISTER" = "0" ] && command -v node >/dev/null 2>&1; then
   ' 2>/dev/null || true
 fi
 
+# Compute the URL suffix used when opening the browser. Defaults to the
+# project just registered above (the launching repo is the natural focus
+# of attention) so the dashboard lands on it instead of whichever project
+# happened to be selected last in localStorage. Skipped when registration
+# was skipped (e.g. running from inside the toolkit repo) or when the
+# repo basename isn't usable.
+PROJECT_QS=""
+if [ "$SKIP_REGISTER" = "0" ]; then
+  PROJECT_NAME="$(basename "$REPO_ROOT")"
+  if [ -n "$PROJECT_NAME" ]; then
+    # urlencode just spaces — the % sign and most other shell-safe chars
+    # are tolerable in URLSearchParams. If a project name contains ?, &,
+    # or #, the user has bigger problems than dashboard linking.
+    PROJECT_QS="?project=$(printf '%s' "$PROJECT_NAME" | sed 's/ /%20/g')"
+  fi
+fi
+
 # Already running? Verify the PID is alive.
 if [ -f "$PID_FILE" ]; then
   EXISTING_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [ -n "$EXISTING_PID" ] && kill -0 "$EXISTING_PID" 2>/dev/null; then
     if [ -f "$URL_FILE" ]; then
       RUNNING_URL="$(cat "$URL_FILE")"
-      echo "[sprint-dashboard] already running: $RUNNING_URL"
-      [ "$OPEN_BROWSER" = "1" ] && open_in_browser "$RUNNING_URL"
+      echo "[sprint-dashboard] already running: ${RUNNING_URL}${PROJECT_QS}"
+      [ "$OPEN_BROWSER" = "1" ] && open_in_browser "${RUNNING_URL}${PROJECT_QS}"
     else
       echo "[sprint-dashboard] already running (pid $EXISTING_PID)"
     fi
@@ -120,8 +137,8 @@ i=0
 while [ $i -lt 30 ]; do
   if [ -f "$URL_FILE" ]; then
     LAUNCHED_URL="$(cat "$URL_FILE")"
-    echo "[sprint-dashboard] launched: $LAUNCHED_URL"
-    [ "$OPEN_BROWSER" = "1" ] && open_in_browser "$LAUNCHED_URL"
+    echo "[sprint-dashboard] launched: ${LAUNCHED_URL}${PROJECT_QS}"
+    [ "$OPEN_BROWSER" = "1" ] && open_in_browser "${LAUNCHED_URL}${PROJECT_QS}"
     exit 0
   fi
   sleep 0.1

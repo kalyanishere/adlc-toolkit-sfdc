@@ -298,12 +298,40 @@
 
   const PHASE_DEFAULT = ['0 Worktree','1 Spec','2 Architect','3 Validate','4 Implement','5 Verify','6 PR','7 CI','8 Merge'];
   const SELECT_KEY = 'adlc-dashboard-selected-project';
-  let selectedProject = (() => {
+
+  // Initial selection precedence:
+  //   1. ?project=<name> on the URL — set by launch.sh whenever a skill
+  //      opens the dashboard, so the launching repo wins focus over a
+  //      stale localStorage choice.
+  //   2. localStorage from a previous visit.
+  //   3. First project in the snapshot (handled in render()).
+  // The URL param is "sticky" — once honored, we DON'T strip it from the
+  // address bar so a manual reload keeps the same default; switching via
+  // the dropdown writes localStorage AND clears any stale URL param so
+  // future reloads honor the user's explicit choice.
+  let _urlProjectHint = '';
+  try {
+    _urlProjectHint = new URLSearchParams(window.location.search).get('project') || '';
+  } catch (_) {}
+
+  let selectedProject = _urlProjectHint || (() => {
     try { return localStorage.getItem(SELECT_KEY) || ''; } catch (_) { return ''; }
   })();
   function setSelectedProject(name) {
     selectedProject = name;
     try { localStorage.setItem(SELECT_KEY, name); } catch (_) {}
+    // Once the user has explicitly chosen a project, drop ?project= from
+    // the URL — without this, a reload after switching would snap back
+    // to the launch.sh default. Use replaceState so we don't pollute
+    // browser history.
+    if (_urlProjectHint && name && name !== _urlProjectHint) {
+      _urlProjectHint = '';
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete('project');
+        window.history.replaceState(null, '', u.toString());
+      } catch (_) {}
+    }
   }
 
   function fmtSpan(ms) {
@@ -552,7 +580,24 @@
       return;
     }
 
+    // If the URL hinted a project that hasn't shown up in the registry
+    // yet, hold off on falling back to projects[0] for a few snapshots —
+    // launch.sh upserts the registry before opening the URL, but the
+    // server polls every ~1.5s so there's a short window where the UI
+    // beats the registry refresh.
+    const hintMissing = _urlProjectHint && !projects.some((p) => p.name === _urlProjectHint);
+    if (hintMissing && (window.__hintGraceTicks = (window.__hintGraceTicks || 0) + 1) < 4) {
+      // Wait — the SSE/refresh tick will re-render shortly with the
+      // registered project visible. Render an empty-but-honest state.
+      pickerEl.hidden = true;
+      selectEl.innerHTML = '';
+      rootPathEl.textContent = '';
+      rootPathEl.title = '';
+      main.innerHTML = `<div class="empty">Loading project <b>${escapeHtml(_urlProjectHint)}</b>…</div>`;
+      return;
+    }
     if (!projects.some((p) => p.name === selectedProject)) {
+      // Hint never showed up — fall back to first registered project.
       setSelectedProject(projects[0].name);
     }
     const active = projects.find((p) => p.name === selectedProject) || projects[0];
