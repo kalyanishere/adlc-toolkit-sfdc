@@ -45,7 +45,7 @@ Add CRUD permissions for standard and custom objects:
 
 ## Step 3: Set Field-Level Security
 
-Define field permissions for sensitive or custom fields:
+Define field permissions ONLY for fields that are eligible for FLS — not every field on an object qualifies. Mixing in required fields, system fields, master-detail relationships, or audit-only fields is the #1 cause of permission-set deploy failures and the bug that bit AGN-REQ-003 in the AGN_KYC project.
 
 ```xml
 <fieldPermissions>
@@ -55,22 +55,45 @@ Define field permissions for sensitive or custom fields:
 </fieldPermissions>
 ```
 
-**Important:**
-- Required fields must NEVER appear in list of field permissions. Granting field-level security on required fields is not allowed by the platform and will cause deployment failure. 
-- Before adding any field, confirm from the object metadata that the field exists and is not required
-- A field is required when its metadata contains `<required>true</required>`:
-- Formula fields cannot be editable
-- Master-detail fields are required fields on the child (detail) object
+### What MUST NOT appear in `<fieldPermissions>` — exclusion gate
 
+Treat the categories below as a hard "do not list" gate. The pre-flight script (Step 7 below) enforces them, but the gate exists so authoring stops here, not at deploy time.
+
+| Category | Examples | Why excluded |
+|---|---|---|
+| **System / audit-managed fields** | `Id`, `CreatedById`, `CreatedDate`, `LastModifiedById`, `LastModifiedDate`, `SystemModstamp`, `IsDeleted`, `OwnerId`, `LastActivityDate`, `LastViewedDate`, `LastReferencedDate`, `RecordTypeId`, `MayEdit`, `IsLocked` | Platform-managed, not user-settable. Listing them yields "field is not eligible for field-level security" deploy errors. The platform always grants the right access automatically. |
+| **Required fields** | Any field with `<required>true</required>` in its `.field-meta.xml`; standard required fields like `Account.Name`, `Contact.LastName`, `Task.Subject`; master-detail parent lookups | The platform always grants access to required fields. Adding `<fieldPermissions>` for them fails deploy with `Cannot grant FLS on a required field`. |
+| **Master-detail relationships** | The lookup field on the child side of any M-D | Implicitly required + permission-controlled by the parent. |
+| **Auto-number fields** | Often the Name field on transaction objects (Invoices, Tickets) | Platform-generated; `editable=true` always fails. If listed, MUST set `editable=false`. |
+| **Formula fields** | Any `<formula>` in `.field-meta.xml`, including roll-up summaries | Read-only by definition; `editable=true` always fails. If listed, MUST set `editable=false`. |
+| **Compound fields** | `Account.Address`, `Contact.MailingAddress`, `Person Account.Name` | Composite of other fields; FLS is set on the components, not the compound. |
+
+### What SHOULD appear in `<fieldPermissions>`
+
+- Custom fields (`__c`) that aren't required and aren't formulas
+- Standard fields that are user-settable AND not in the exclusion list above (e.g., `Account.Industry`, `Contact.Email`, `Opportunity.StageName`)
+
+### Decision tree before adding a field
+
+1. Is the field name in the system-fields exclusion list above? → SKIP. Don't add it.
+2. Open the field's `.field-meta.xml`. Does it contain `<required>true</required>`? → SKIP.
+3. Does it contain `<formula>` or `<type>AutoNumber</type>` or `<type>MasterDetail</type>`? → SKIP unless you specifically need read-only with `editable=false`, and even then prefer omitting.
+4. Otherwise → add with `<readable>true</readable>` plus `<editable>true</editable>` (or `false` for read-only).
+
+### Reference snippets
+
+A required field — DO NOT include in `<fieldPermissions>`:
 ```xml
 <fields>
     <fullName>FieldName__c</fullName>
     <required>true</required>
 </fields>
 ```
-- Use format `ObjectName.FieldName` for field references
-- Set both readable and editable to true when the user needs edit access; editable implies readable
-- If all fields should be visible, can alternatively enable the "viewAllFields" object permission
+
+Field reference format inside `<fieldPermissions>`:
+- Use `ObjectName.FieldName` (e.g., `Account.Industry`, `Custom__c.Status__c`)
+- `editable=true` implies `readable=true`; setting `readable=false` with `editable=true` is invalid
+- If granting blanket access, prefer object-level `<viewAllFields>true</viewAllFields>` over enumerating every field
 
 ## Step 4: Grant User Permissions
 

@@ -231,28 +231,71 @@ Use the lesson template (`<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md`, f
 
 If the bug genuinely produced no useful lesson (one-line typo, etc.), say so explicitly in the final summary — don't silently skip.
 
+**Step 4a — Back-update the parent REQ's spec and architecture docs.**
+
+When a bug fixes shipped behavior, the REQ that originally shipped that code now describes a slightly inaccurate state. Append a "Post-ship corrections" section to the parent REQ's spec so the historical record stays accurate without rewriting the original.
+
+1. **Identify the parent REQ.** Use the bug's frontmatter `parent_req:` field if set, OR derive it from `git log --diff-filter=AM <files-touched-by-fix>` and find the most recent REQ id mentioned in that history. If multiple REQs touched the file, pick the one that originally introduced the buggy behavior; if ambiguous, list all candidates and ask the user.
+
+2. **Append a correction note** to `<ARTIFACT_ROOT>/.adlc/specs/<parent-req-spec-dir>/requirement.md`. **Append, do not rewrite** — the original spec is the historical record:
+   ```markdown
+
+   ## Post-ship corrections
+
+   - **<BUG_ID>** (resolved <YYYY-MM-DD>): <one-line description of what was wrong>. Fix: <one-line description of what changed>. See `.adlc/bugs/<BUG_ID>-slug.md`.
+   ```
+   If the section already exists from a prior bug fix, append a new bullet — don't duplicate the heading.
+
+3. **Update architecture documentation IF the fix changed an architectural decision.** Two places to consider:
+   - `<ARTIFACT_ROOT>/.adlc/specs/<parent-req-spec-dir>/architecture-notes.md` (per-REQ architecture, if it exists for that REQ)
+   - `<ARTIFACT_ROOT>/.adlc/context/architecture.md` (project-wide architecture, if the bug invalidated a documented pattern)
+
+   Same rule — append a "Post-ship correction" section, don't silently rewrite the originals.
+
+4. **Skip this step entirely** when:
+   - The bug is purely a typo or comment fix (no shipped-behavior change)
+   - The bug's parent REQ cannot be identified after honest investigation (note the gap in the bug report's "Notes" section instead)
+   - The bug report explicitly opts out via `parent_req: none` in frontmatter (e.g., bugs filed against pre-ADLC legacy code)
+
+These edits ALSO stay uncommitted on `main` until Step 4b's chore commit, which now stages the parent-REQ doc updates alongside the bug-report and lesson.
+
 **Step 4b — Persist bug-report status update + lesson to `main`.**
 
 The PRs were already merged in Step 1 of this Phase. Steps 3 and 4 wrote new content into `<ARTIFACT_ROOT>` (the primary repo's main checkout) but those edits are uncommitted. Land them as a **separate chore commit on `main`** — same model as `/wrapup`'s Step 4b:
 
 ```bash
-git -C "$ARTIFACT_ROOT" status --short -- .adlc/bugs/ .adlc/knowledge/ \
-  | grep -qE '^\s*[?AM]' || { echo "bugfix: no bug-report or lesson edits to persist — skipping commit"; exit 0; }
+git -C "$ARTIFACT_ROOT" status --short -- .adlc/bugs/ .adlc/knowledge/ .adlc/specs/ .adlc/context/ \
+  | grep -qE '^\s*[?AM]' || { echo "bugfix: no bug-report / lesson / parent-spec edits to persist — skipping commit"; exit 0; }
 
 git -C "$ARTIFACT_ROOT" checkout main
 git -C "$ARTIFACT_ROOT" pull --ff-only origin main
 
-# Stage only the bug report and any new lesson — never blanket-add.
+# Stage the bug report, any new lesson, AND any parent-REQ / architecture
+# back-update from Step 4a. Never blanket-add.
 git -C "$ARTIFACT_ROOT" add \
   .adlc/bugs/BUG-xxx-slug.md \
   .adlc/knowledge/lessons/LESSON-*.md 2>/dev/null || true
+# Parent REQ spec + architecture-notes (Step 4a back-update). Add only the
+# specific files actually edited; never blanket-add .adlc/specs/.
+# Substitute <parent-req-spec-dir> with the resolved value from Step 4a.
+[ -n "${PARENT_REQ_DIR:-}" ] && git -C "$ARTIFACT_ROOT" add \
+  ".adlc/specs/$PARENT_REQ_DIR/requirement.md" \
+  ".adlc/specs/$PARENT_REQ_DIR/architecture-notes.md" 2>/dev/null || true
+# Project-wide architecture (rare — only when a documented pattern was invalidated).
+git -C "$ARTIFACT_ROOT" status --short -- .adlc/context/architecture.md 2>/dev/null \
+  | grep -q . && git -C "$ARTIFACT_ROOT" add .adlc/context/architecture.md
 
 git -C "$ARTIFACT_ROOT" diff --cached --quiet && {
   echo "bugfix: nothing staged — skipping commit"
   exit 0
 }
 
-git -C "$ARTIFACT_ROOT" commit -m "chore(BUG-xxx): mark resolved + capture lesson"
+# Commit message convention: include the parent REQ id so a future
+# `git log --grep=REQ-xxx` surfaces the post-ship correction trail.
+COMMIT_MSG="chore(BUG-xxx): mark resolved + capture lesson"
+[ -n "${PARENT_REQ_ID:-}" ] && COMMIT_MSG="docs($PARENT_REQ_ID): post-ship correction from BUG-xxx + capture lesson"
+
+git -C "$ARTIFACT_ROOT" commit -m "$COMMIT_MSG"
 git -C "$ARTIFACT_ROOT" push origin main
 ```
 

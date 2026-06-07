@@ -171,16 +171,54 @@ function readTaskStrip(specDir) {
   });
 }
 
-function projectReqState(specDir) {
+// Last-known-good state cache. Keyed by `<rootPath>::<reqId>`. The cache
+// holds the most recent stateful snapshot we've seen for a given REQ —
+// independent of whether the underlying file currently exists on disk.
+//
+// Why this exists: under the new contract `pipeline-state.json` lives in
+// the main checkout for the entire run (and survives worktree removal),
+// but for legacy pipelines started under the old contract the only
+// state file is inside a worktree that Phase 8 cleanup removes. Without
+// this cache, a removed worktree causes the REQ to revert to "spec only
+// — pipeline not started" on the dashboard, which is wrong for a REQ
+// that had been mid-flight. With this cache, the last observed snapshot
+// stays visible (with a stale=true flag the UI can surface) until the
+// reconciler writes a finalized file to the main checkout.
+const lastKnownState = new Map();
+
+function projectReqState(specDir, opts = {}) {
   const id = path.basename(specDir).match(/^((?:[A-Z]+-)?REQ-\d+)/);
   const reqId = id ? id[1] : path.basename(specDir);
   const stateFile = path.join(specDir, 'pipeline-state.json');
   const state = readJsonSafe(stateFile);
+  const cacheKey = `${opts.rootPath || ''}::${reqId}`;
 
   const title = readReqTitle(specDir);
   const tasks = readTaskStrip(specDir);
 
   if (!state) {
+    // No live state file. Two sub-cases matter for the dashboard:
+    //
+    //   (a) Spec exists but pipeline has never run — render as "spec only"
+    //       (the legitimate "yet to start" case).
+    //   (b) Pipeline WAS running and we have a cached last-known snapshot
+    //       — the worktree was probably removed (Phase 8 cleanup) before
+    //       state was finalized to the main checkout, OR a legacy run is
+    //       in flight without main-checkout state. Render the cached
+    //       snapshot with `stale: true` so the UI can mark it as
+    //       "last known: phase N — file gone, awaiting reconciliation".
+    //       Never regress to "yet to start" — that's the bug we're
+    //       fixing.
+    const cached = lastKnownState.get(cacheKey);
+    if (cached) {
+      return {
+        ...cached,
+        title: title || cached.title,
+        tasks,                    // refresh tasks from disk every snapshot
+        stale: true,
+        staleReason: 'pipeline-state.json no longer present on disk; showing last observed snapshot. Run `tools/reconcile-pipeline-state/reconcile.sh` if the REQ has merged but the dashboard hasn\'t finalized.',
+      };
+    }
     return {
       reqId,
       title,
@@ -205,6 +243,7 @@ function projectReqState(specDir) {
       stalled: false,
       stalledSeconds: 0,
       stallThresholdSec: STALL_THRESHOLD_SEC,
+      stale: false,
     };
   }
 
@@ -351,7 +390,7 @@ function projectReqState(specDir) {
     }
   }
 
-  return {
+  const result = {
     reqId,
     title,
     hasState: true,
@@ -375,7 +414,17 @@ function projectReqState(specDir) {
     stalled,
     stalledSeconds,
     stallThresholdSec: STALL_THRESHOLD_SEC,
+    stale: false,
   };
+  // Cache the latest stateful snapshot so a subsequent disappearance of
+  // the file (typical worktree-cleanup-before-finalization case) keeps
+  // the REQ visible at its last known phase rather than reverting it to
+  // "yet to start". See the no-state branch above for how the cache is
+  // surfaced. Strip the live `tasks` array — it's re-read from disk on
+  // every snapshot; caching it would freeze task status alongside phase.
+  const { tasks: _tasksDrop, ...cacheable } = result;
+  lastKnownState.set(cacheKey, cacheable);
+  return result;
 }
 
 // =============================================================================
@@ -537,33 +586,54 @@ function userWaitFor(rootPath, nowMs) {
 }
 
 function snapshotProject(root) {
-  // Collect spec dirs from both the main checkout (post-merge state files)
-  // and every active worktree (in-flight state files written by /proceed
-  // Step 0). Dedupe by REQ id, preferring the candidate that has a
-  // pipeline-state.json — that's the live one. If neither has state, the
-  // merged-checkout copy wins (it's the canonical resting place once a
-  // pipeline finishes and worktrees are removed).
-  const candidates = [
-    ...listSpecDirs(root.path),
-    ...listWorktreeSpecDirs(root.path),
-  ];
+  // Resolution order for the live state file (post-2026-06-07 contract):
+  //
+  //   Main checkout's spec dir is now the CANONICAL location of
+  //   pipeline-state.json for the entire run — Phase 0 → Phase 8 — so it
+  //   survives `git worktree remove` in Phase 8 cleanup. The dashboard
+  //   prefers the main-checkout candidate whenever it has a state file.
+  //
+  //   Legacy fallback: pipelines started under the old contract still
+  //   have their state file inside the worktree. We honor that as a
+  //   secondary source — but the moment a main-checkout state appears,
+  //   it wins. This prevents the "ghost REQ" failure mode where a
+  //   worktree gets removed mid-run, the worktree state file vanishes,
+  //   and the dashboard reverts the REQ to "spec only / yet to start".
+  //
+  //   Stickiness: once we've seen a stateful entry for a REQ, we never
+  //   regress it to a stateless candidate (e.g., a fresh spec dir that
+  //   appeared in main after the worktree was removed). The reconciler
+  //   is the only path that should change a stateful → stateless
+  //   transition, and it does so explicitly by writing a new file.
+  const mainSpecs = listSpecDirs(root.path);
+  const wtSpecs = listWorktreeSpecDirs(root.path);
   const byReq = new Map();
-  for (const dir of candidates) {
+  // Pass 1: main checkout — canonical preference.
+  for (const dir of mainSpecs) {
+    const id = reqIdFromSpecDir(dir);
+    const hasState = fs.existsSync(path.join(dir, 'pipeline-state.json'));
+    byReq.set(id, { dir, hasState, source: 'main' });
+  }
+  // Pass 2: worktree — only fills slots where main had no state at all.
+  // Critical: this NEVER overrides a main-checkout candidate that already
+  // has state. Worktree state is only used as a legacy bridge.
+  for (const dir of wtSpecs) {
     const id = reqIdFromSpecDir(dir);
     const hasState = fs.existsSync(path.join(dir, 'pipeline-state.json'));
     const existing = byReq.get(id);
     if (!existing) {
-      byReq.set(id, { dir, hasState });
+      byReq.set(id, { dir, hasState, source: 'worktree' });
       continue;
     }
-    // Prefer whichever candidate carries a state file. If both do (shouldn't
-    // normally happen — would mean a merged spec with the worktree still
-    // around), prefer the worktree (in-flight wins; the candidate list
-    // appends worktrees after main, so the latter overwrites).
-    if (hasState && !existing.hasState) byReq.set(id, { dir, hasState });
-    else if (hasState && existing.hasState) byReq.set(id, { dir, hasState });
+    // Main candidate exists but has no state (Phase 0/1 not yet written,
+    // or state was lost). Worktree's state file (if any) is a better
+    // signal than empty — but DON'T regress a main-checkout candidate
+    // that already has state.
+    if (!existing.hasState && hasState) {
+      byReq.set(id, { dir, hasState, source: 'worktree' });
+    }
   }
-  const reqs = [...byReq.values()].map((c) => projectReqState(c.dir)).filter(Boolean);
+  const reqs = [...byReq.values()].map((c) => projectReqState(c.dir, { rootPath: root.path })).filter(Boolean);
   reqs.sort((a, b) => a.reqId.localeCompare(b.reqId));
   return {
     name: root.name,

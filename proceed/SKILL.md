@@ -326,14 +326,18 @@ Now that validation has passed, create the per-repo worktrees and migrate the pi
 
    Record each repo's absolute `worktree` path and `branch` in the main-checkout state file's `repos` block. The recorded path is **immutable** for the rest of the run — Phases 2–8 read it from `repos[<id>].worktree`, never re-derive from cwd.
 
-4. **Move the pipeline-state file into the primary worktree.** The pre-validation file at `<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json` (written in Step 0 item 5a) becomes the live file at `<primary-worktree-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json`. Use a copy + remove (NOT `mv`) and ensure both writes happen via the file system, not git, since the file is untracked at this point in both locations.
-   ```bash
-   mkdir -p "<primary-worktree-path>/.adlc/specs/REQ-xxx-*"
-   cp "<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json" \
-      "<primary-worktree-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json"
-   rm "<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json"
+4. **DO NOT move the pipeline-state file.** Earlier revisions of this skill copy+removed the file into the worktree, then back-mirrored on each phase write. That contract was the root cause of "ghost REQs" — when `git worktree remove` runs in Phase 8 (or the runner dies mid-pipeline) the only live state file disappears with the worktree, the dashboard reverts the REQ to "spec only / yet-to-start," and reconciliation can only partially recover it. **The pipeline-state.json is canonical in the main checkout for the entire run.** Phases 2–8 read and write the same file at:
    ```
-   The dashboard's worktree-aware scan finds the file under the worktree on its next ~1.5s poll; it never sees both at once. From this point on, every state-file read/write goes to the worktree path.
+   <primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json   # ALWAYS this path — never the worktree
+   ```
+   Freeze the resolved path once into a shell variable and pass it explicitly to every state-mutating step:
+   ```bash
+   STATE_FILE="<primary-repo-path>/.adlc/specs/<spec-dir-name>/pipeline-state.json"
+   # all subsequent reads/writes go via $STATE_FILE
+   ```
+   The worktree itself is for the *code* (Apex, LWC, perm sets, etc.). The `.adlc/` artifacts — pipeline state, requirement.md edits, task files, status updates — live in the main checkout's working tree, where they survive worktree removal and are immediately visible to the dashboard's scan of `<root>/.adlc/specs/`.
+
+   **Why no copy at all (not even a mirror):** dual-write doubles the failure surface (silent divergence when only one side is written) and serves no purpose — the dashboard already prefers main-checkout state files (server.js prefers a stateful main-checkout candidate over a worktree candidate via `snapshotProject`). A single source of truth eliminates the entire class of "which file is the dashboard reading?" bugs.
 
 5. **Change your working directory to the primary repo's worktree.** Orchestration (state file reads/writes, spec edits, PR coordination) happens there from now on. Task implementation in Phase 4 will `cd` into the target repo's worktree per task.
 

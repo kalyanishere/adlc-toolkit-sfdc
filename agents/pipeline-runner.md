@@ -50,22 +50,39 @@ Every write to `pipeline-state.json` MUST honor these types exactly. Loose typin
 
 If you find yourself wanting to put a descriptive string into `currentPhase` "for clarity," stop — clarity belongs in `phaseHistory[*].name`. The number is what the dashboard renders.
 
-## Worktree Isolation
+## Worktree Isolation — and the State File Exception
 
-You operate inside an isolated worktree for the entire run **after Step 1.5**. Step 0 (preflight + state init) and Phase 1 (Validate Spec) run in the primary repo's MAIN CHECKOUT — no worktree exists yet, by design, so a failed validation does not leave a stray worktree behind. Step 1.5 (after Phase 1 passes) parses the launch prompt's `WORKTREE PATH (mandatory): ...` line, runs `git worktree add`, moves the pre-validation `pipeline-state.json` from the main checkout into the worktree, and `cd`s in. From Step 1.5 onward, `pipeline-state.json.repos[<id>].worktree` is the immutable source of truth for the path.
+You operate inside an isolated worktree for **code work** (Apex, LWC, perm sets, force-app/**) for the entire run after Step 1.5. Step 0 (preflight + state init) and Phase 1 (Validate Spec) run in the primary repo's MAIN CHECKOUT — no worktree exists yet, by design, so a failed validation does not leave a stray worktree behind. Step 1.5 (after Phase 1 passes) parses the launch prompt's `WORKTREE PATH (mandatory): ...` line and runs `git worktree add`. From Step 1.5 onward, `pipeline-state.json.repos[<id>].worktree` is the immutable source of truth for the worktree path.
 
-1. **State is the sole source of truth post-Step-1.5.** Step 1.5 reads the launch prompt **once** to populate state. Every phase from Phase 2 onward MUST read the worktree path exclusively from `pipeline-state.json.repos[<id>].worktree`. You MUST NOT infer the worktree from cwd, from the REQ id, from re-reading the launch prompt, or from any naming convention.
-2. **Re-confirm the active worktree at the start of every phase from Phase 2 onward.** Read `pipeline-state.json` first thing; do not assume cwd, paths, or context from a prior phase carry over. Shell cwd does not persist between Bash calls — a `cd` issued in one Bash call has no effect on the next — so the safe pattern is to use absolute paths or `git -C <worktree>` form (see rule 3) rather than rely on `cd`.
+**`pipeline-state.json` is the explicit exception to worktree isolation.** It lives in the **primary repo's main checkout** for the entire run — Phase 0 through Phase 8 — never inside a worktree. This is deliberate:
+
+- Worktrees are removed in Phase 8 Step 4. If state lived in the worktree, the canonical record would die with the cleanup. That's the "ghost REQ" failure mode that bit the AGN_KYC project (REQ-005 stalled at phase 6 even though it had merged, because the only state file was in a worktree that had already been removed).
+- The dashboard scans `<root>/.adlc/specs/` first; only when no main-checkout state exists does it fall back to scanning worktrees. State that lives in main is always visible, even after Phase 8 cleanup.
+- Single source of truth eliminates the entire class of "which file is the dashboard reading?" bugs that mirror/dual-write designs introduce.
+
+**Resolve the canonical state file path ONCE in Phase 0** and pass it explicitly to every subsequent state mutation. Convention:
+
+```
+STATE_FILE = <repos[primary-id].path>/.adlc/specs/<spec-dir-name>/pipeline-state.json
+```
+
+Where `<repos[primary-id].path>` is the **main-checkout absolute path** (NOT `repos[primary-id].worktree`). Every Edit/Write that mutates state MUST target `$STATE_FILE`.
+
+### Worktree rules (for code work, not state)
+
+1. **State is the sole source of truth for paths.** Step 1.5 reads the launch prompt **once** to populate state. Every phase from Phase 2 onward MUST read the worktree path exclusively from `pipeline-state.json.repos[<id>].worktree`. You MUST NOT infer the worktree from cwd, from the REQ id, from re-reading the launch prompt, or from any naming convention.
+2. **Re-confirm the active worktree at the start of every phase from Phase 2 onward.** Read `pipeline-state.json` (from `$STATE_FILE` — i.e., the main checkout) first thing; do not assume cwd, paths, or context from a prior phase carry over. Shell cwd does not persist between Bash calls — a `cd` issued in one Bash call has no effect on the next — so the safe pattern is to use absolute paths or `git -C <worktree>` form (see rule 3) rather than rely on `cd`.
 3. **Every Bash call MUST use absolute paths or `git -C <worktree>` form.** You MUST NOT rely on inherited cwd. Relative paths are a protocol violation.
-4. **You MUST NOT write to the parent repo's working tree.** The single sanctioned exception is the Phase 8 single-repo `gh pr merge`, which runs from `repos[<id>].path` because git refuses to delete a branch checked out by a worktree. See "Worktree gotchas" under Phase 8 for the operational detail — do not generalize that exception to any other command.
+4. **Code commits go to the worktree; state writes go to main.** The worktree is a working tree on the feature branch (`feat/REQ-xxx-...`). All code-bearing files (`force-app/**`, test files, etc.) are edited inside the worktree and committed by `git -C <worktree> commit ...`. The state file is NOT a code file — it's an out-of-band orchestration ledger. It lives in the main checkout's untracked working tree (the `.adlc/specs/REQ-xxx-*/` directory was created in Phase 0 and is still there). Editing `$STATE_FILE` does not interact with the feature branch's commit history.
+5. **The Phase 8 `gh pr merge` exception still applies.** Single-repo merges run from `repos[<id>].path` because git refuses to delete a branch checked out by a worktree. See "Worktree gotchas" under Phase 8.
 
 ## Pipeline Phases
 
 Execute these phases in order, maintaining `pipeline-state.json` throughout:
 
-0. **Preflight + Pre-Validation State Init**: resolve repo registry, write `pipeline-state.json` to the primary main checkout (so the dashboard sees the pipeline immediately), load shared context. NO worktree yet.
+0. **Preflight + Pre-Validation State Init**: resolve repo registry, write `pipeline-state.json` to the primary main checkout (so the dashboard sees the pipeline immediately), load shared context. NO worktree yet. Freeze `STATE_FILE = <primary-repo-path>/.adlc/specs/<spec-dir-name>/pipeline-state.json` as the canonical state path for the rest of the run.
 1. **Validate Spec**: Run the `/validate` checklist inline against the main-checkout `requirement.md`. APPROVED → move to Step 1.5. NEEDS REVISION → fix and re-validate up to 3 loops.
-1.5. **Create Worktrees + Move State File**: parse the launch prompt's `WORKTREE PATH (mandatory):` line, `git worktree add` from `origin/<integration-branch>`, then `cp` the state file into the new worktree's `.adlc/specs/REQ-xxx-*/` and `rm` it from the main checkout. `cd` into the worktree. From here on, all phases read/write state from the worktree.
+1.5. **Create Worktrees**: parse the launch prompt's `WORKTREE PATH (mandatory):` line, `git worktree add` from `origin/<integration-branch>`. Record the worktree path in `repos[<id>].worktree` via Edit/Write to `$STATE_FILE`. **Do NOT move or copy `pipeline-state.json` — it stays in the main checkout for the entire run.** `cd` into the worktree for code work, but every state-file Edit continues to target `$STATE_FILE` (absolute path in the main checkout).
 2. **Architect & Tasks**: Design architecture and break into tasks (explore codebase yourself, do not launch explore agents)
 3. **Validate Architecture**: Run the `/validate` checklist inline for architecture phase
 4. **Implement**: Execute each task sequentially (follow dependency order)
@@ -229,7 +246,7 @@ The order is **load-bearing in two ways**:
 1. **State finalization MUST come FIRST.** Late-Phase-8 deaths (context exhaustion, ask-prompt timeouts, provider truncation) are the most common failure mode in this pipeline. The failure that bites hardest is "merged on remote, but no `pipeline-state.json` finalization on disk" — the dashboard then shows a permanent "spec only" ghost on a REQ that already shipped. By writing the terminal flags BEFORE running `/wrapup`, a runner that dies during wrapup or worktree-removal still leaves the dashboard correctly green. Worst case: a green REQ whose lessons weren't captured (recoverable by re-running `/wrapup REQ-xxx`). Best case: nothing dies and every step happens.
 2. **`/wrapup` MUST run before worktree removal.** It writes ADLC artifacts (lessons, assumptions, status updates) into the primary repo's main checkout. Earlier revisions removed the worktree first and lost every captured lesson.
 
-**Step 1 — Finalize pipeline-state.json IMMEDIATELY after the merge confirmation.** Single atomic write, idempotent. `<now>` MUST come from `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash — do NOT type a timestamp. Apply via Edit/Write to the worktree's `pipeline-state.json`:
+**Step 1 — Finalize pipeline-state.json IMMEDIATELY after the merge confirmation.** Single atomic write, idempotent. `<now>` MUST come from `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash — do NOT type a timestamp. Apply via Edit/Write to **the canonical `$STATE_FILE` in the primary repo's main checkout** (NOT the worktree's copy — Step 1.5 of this contract no longer creates a worktree-side state file; the main-checkout file is the only file). After this step the worktree can be safely removed without losing finalization:
 
 ```
 {

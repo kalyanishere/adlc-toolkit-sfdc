@@ -205,12 +205,57 @@ if (opts.offline) {
 
 // --- apply the FLS-eligibility rules -------------------------------------
 
+// System / audit-managed fields are platform-controlled and NEVER eligible
+// for FLS regardless of object. Listing any of them in <fieldPermissions>
+// fails deploy with "Field <X> is not eligible for FLS" or similar. This
+// list is checked BEFORE the org describe so it works in --offline mode
+// (no Tooling API call needed to know `Id` isn't FLS-eligible).
+const SYSTEM_FIELDS = new Set([
+  "Id",
+  "CreatedById",
+  "CreatedDate",
+  "LastModifiedById",
+  "LastModifiedDate",
+  "SystemModstamp",
+  "IsDeleted",
+  "OwnerId",
+  "LastActivityDate",
+  "LastViewedDate",
+  "LastReferencedDate",
+  "RecordTypeId",
+  "MayEdit",
+  "IsLocked",
+  "ConnectionReceivedId",
+  "ConnectionSentId",
+]);
+// Compound fields (Address, Name on Person Account/Lead/Contact) — FLS is
+// set on the *components* (Street, City, FirstName, LastName), never the
+// composite. Detected primarily by IsCompound from FieldDefinition, but
+// also by name as a belt-and-suspenders check for offline runs and APIs
+// that don't surface IsCompound consistently.
+const COMPOUND_FIELD_NAMES = new Set([
+  "Address", "BillingAddress", "ShippingAddress",
+  "MailingAddress", "OtherAddress",
+  "Name",  // PersonAccount/Lead/Contact composite — only flag when isCompound is also true
+]);
+
 for (const file of permSetFiles) {
   const xml = readFileSync(file, "utf8");
   const fps = parseFieldPermissions(xml);
   for (const fp of fps) {
     if (!fp.field || !fp.field.includes(".")) continue;   // already flagged
     const [object, field] = fp.field.split(".", 2);
+
+    // System / audit fields — fail fast, no org describe needed.
+    if (SYSTEM_FIELDS.has(field)) {
+      findings.push({
+        file, severity: "block", type: "system-field",
+        field: fp.field,
+        message: `${fp.field} is a system / audit-managed field. The platform always controls access to these — listing them in <fieldPermissions> fails deploy. Remove the entry; the platform grants the appropriate access automatically.`,
+      });
+      continue;
+    }
+
     const desc = orgFields[object]?.[field];
     if (!desc && !opts.offline) {
       findings.push({
@@ -221,6 +266,15 @@ for (const file of permSetFiles) {
       continue;
     }
     if (!desc) continue;
+    // Compound fields: FLS belongs on the components, not the composite.
+    if (desc.isCompound || COMPOUND_FIELD_NAMES.has(field)) {
+      findings.push({
+        file, severity: "block", type: "compound-field",
+        field: fp.field,
+        message: `${fp.field} is a compound field. FLS must be set on the component fields (e.g. Street, City for Address), not on the composite. Remove this <fieldPermissions> entry.`,
+      });
+      continue;
+    }
     // Master-detail: never eligible for FLS.
     if (desc.dataType === "MasterDetail") {
       findings.push({

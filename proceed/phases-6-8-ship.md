@@ -214,7 +214,9 @@ The order is **load-bearing** in two ways:
 
 Run this immediately after the merge confirmation in any path above (single-repo `gh pr merge`, single-repo local hand-merge, or cross-repo `mergeOrder` walk). It's idempotent: re-running it on an already-finalized state is a no-op. The bash output of `date -u +"%Y-%m-%dT%H:%M:%SZ"` is the canonical `<now>` (LLM has no clock; do NOT type a timestamp).
 
-```jq-style update applied via Edit/Write to pipeline-state.json
+Apply via Edit/Write to the canonical `$STATE_FILE` (the main-checkout copy at `<primary-repo-path>/.adlc/specs/REQ-xxx-*/pipeline-state.json`). The worktree no longer holds a state file under the current contract — there is exactly one file, in the main checkout, for the entire run.
+
+```jq-style update applied via Edit/Write to $STATE_FILE
 {
   "completed": true,
   "terminalState": "merged",

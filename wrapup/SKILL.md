@@ -176,7 +176,37 @@ If this REQ touched Agentforce metadata (any `.agent` file, `.genAiFunction-meta
 3. **Variant-correct user**: read `.adlc/config.yml` `salesforce.agentforce_variant`. If `Service`, confirm a dedicated Einstein Agent User + system permission set was deployed; if `Employee`, confirm `default_agent_user` is omitted from the agent definition. Surface a finding if mismatched.
 4. **`@InvocableVariable` wrappers**: every `@InvocableMethod` referenced by an Agent Script `apex://` target uses an `@InvocableVariable` wrapper class with named fields — never a bare `List<T>`. Grep `force-app/main/default/classes/*.cls` for `@InvocableMethod` and confirm.
 
-If any check fails, surface as a wrapup blocker. The corrective action is a forward-fix deploy (Salesforce has no rollback) — recommend the user open a follow-up REQ if the deploy already shipped, OR re-run `/canary` against staging after fixing.
+If any check fails, surface as a wrapup blocker. The corrective action is a forward-fix deploy (Salesforce has no rollback) — recommend the user open a **`/bugfix`** if the defect is in already-shipped behavior (a regression, compile error, runtime exception, FLS oversight, or any "what shipped doesn't work as documented"), OR re-run `/canary` against staging after fixing.
+
+### Bug vs follow-up REQ — decision rule
+
+When wrapup or reflect surfaces a fix that is needed against shipped or about-to-ship code, route correctly:
+
+| Symptom | Route | Why |
+|---|---|---|
+| Compile error, runtime exception, ternary type-inference issue, NPE, FLS missing on a field that should have it, deploy failure on a field/object the spec already declared, broken test that flakes against current main | **`/bugfix`** | This is a defect in shipped behavior. It belongs in `.adlc/bugs/`, not `.adlc/specs/`. |
+| Missing scope the original spec never claimed (a new tab, a new perm set, additional integration endpoint, a brand-new field beyond the original data model) | **New REQ** | This is a feature addition. The original spec correctly bounded its scope; this is genuinely net-new work. |
+| Knowledge gap (a lesson, an assumption, a documentation update) | **No new artifact** — log to `.adlc/knowledge/lessons/` or update `.adlc/context/architecture.md` | These don't merit either a REQ or a bug. |
+
+**Default**: when in doubt, prefer `/bugfix`. A bug is cheaper to file (no full spec ceremony) and the bug template captures regression context (reproduction, root cause hypothesis) that a REQ template doesn't.
+
+### Back-update parent spec / architecture when a fix lands
+
+When a `/bugfix` resolves a defect in code that an earlier REQ shipped, **the parent REQ's documentation is now slightly inaccurate**. The bug fix workflow MUST also:
+
+1. **Identify the parent REQ** — read commit history (`git log --grep=REQ- --diff-filter=A` against the affected file) to find which REQ introduced the now-buggy code, OR ask the user to specify it explicitly.
+2. **Append a "Post-ship corrections" section** to that REQ's `requirement.md` (NOT a rewrite — the original spec is the historical record). Format:
+   ```markdown
+   ## Post-ship corrections
+
+   - **BUG-xxx** (resolved YYYY-MM-DD): <one-line description of what was wrong>. <one-line description of what was changed>. See `.adlc/bugs/BUG-xxx-slug.md`.
+   ```
+3. **Update architecture documentation** if the fix changed an architectural decision recorded in `.adlc/context/architecture.md` or in any `<spec-dir>/architecture-notes.md` — same rule (append a correction note, don't silently rewrite the original).
+4. **Commit the doc updates onto `main` in the primary repo** as a separate commit alongside the bug fix's PR. Convention: `docs(REQ-xxx): post-ship correction from BUG-yyy`.
+
+This preserves the historical record (what the original REQ claimed it shipped) while making the *current* state of the docs accurate. Without these back-updates, the architecture diagrams and spec docs slowly drift from the deployed reality, and a future REQ that depends on the old documentation will inherit the original bug.
+
+The `/bugfix` skill orchestrates this back-update automatically; if the user is filing a bug manually (no `/bugfix`), surface the obligation in the wrapup ship summary.
 
 ### Step 4: Capture Knowledge
 Evaluate whether any decisions, patterns, or lessons should be persisted:

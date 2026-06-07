@@ -135,6 +135,7 @@
   .pill.failed  { background: rgba(248,113,113,0.18); color: var(--failed); }
   .pill.merged  { background: rgba(52,211,153,0.18); color: var(--done); }
   .pill.idle    { background: rgba(139,148,167,0.18); color: var(--muted); }
+  .pill.stale   { background: rgba(167,139,250,0.18); color: #c4b5fd; cursor: help; }
   .pill.waiting {
     background: rgba(251,191,36,0.18); color: var(--warn);
     animation: pulse-warn 2s ease-in-out infinite;
@@ -376,6 +377,7 @@
 
   function statePill(req) {
     if (req.completed) return { cls: 'merged', label: 'merged' };
+    if (req.stale) return { cls: 'stale', label: 'stale' };
     if (req.blockers && req.blockers.length) return { cls: 'blocked', label: 'blocked' };
     if (req.failedTasks && req.failedTasks.length) return { cls: 'failed', label: 'failed' };
     if (!req.hasState) return { cls: 'idle', label: 'spec only' };
@@ -437,8 +439,13 @@
 
   function renderBlockers(req) {
     if (!req.blockers || !req.blockers.length) return '';
+    // Stale blockers on already-merged REQs are noise — the pipeline has
+    // shipped and the blocker description (e.g. "merge-order-dependency")
+    // is no longer actionable. Hide them so the dashboard's "Blocker"
+    // banner only signals current work that needs human attention.
+    if (req.completed) return '';
     const items = req.blockers.map((b) => {
-      const txt = typeof b === 'string' ? b : (b.message || JSON.stringify(b));
+      const txt = typeof b === 'string' ? b : (b.description || b.message || JSON.stringify(b));
       return `<li>${escapeHtml(txt)}</li>`;
     }).join('');
     return `<div class="blockers"><div class="title">Blocker</div><ul>${items}</ul></div>`;
@@ -526,6 +533,15 @@
       ? `<div class="stall-hint">No progress for <b>${fmtSpan(req.stalledSeconds * 1000)}</b>. To resume from <code>currentPhase=${escapeHtml(String(req.currentPhase ?? '?'))}</code>, run: <code>/proceed ${escapeHtml(req.reqId)}</code></div>`
       : '';
 
+    // "Stale" hint — the on-disk pipeline-state.json disappeared (typical:
+    // worktree was removed before state finalization landed in main).
+    // The dashboard kept the last known snapshot in memory; the user
+    // either needs to run the reconciler (if the REQ has actually merged)
+    // or `/proceed` (to resume the pipeline that lost its state file).
+    const staleHint = req.stale
+      ? `<div class="stall-hint" style="background:rgba(167,139,250,0.06);border-color:rgba(167,139,250,0.30);color:#e9d5ff">State file gone but last snapshot kept in memory at <b>currentPhase=${escapeHtml(String(req.currentPhase ?? '?'))}</b>. ${escapeHtml(req.staleReason || '')} Try: <code>sh tools/reconcile-pipeline-state/reconcile.sh</code> or <code>/proceed ${escapeHtml(req.reqId)}</code></div>`
+      : '';
+
     return `
       <section class="req${req.stalled ? ' is-stalled' : ''}">
         <div class="req-head">
@@ -541,6 +557,7 @@
           ${renderTasks(req)}
           ${renderBlockers(req)}
           ${stallHint}
+          ${staleHint}
         </div>
       </section>
     `;
