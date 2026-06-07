@@ -457,11 +457,60 @@
       ? `Phase <b>${escapeHtml(req.currentPhase ?? '?')}</b> / 8`
       : `<span style="color:var(--muted)">Spec only — pipeline not started</span>`;
 
-    // Duration: total wall-clock since pipeline first ran on this spec
-    // (state.startedAt — set at Phase 0). Includes any idle gaps between
-    // phases or pickup delays after the pipeline paused.
-    const dur = req.startedAt
-      ? `<span title="Wall-clock since pipeline first started — startedAt=${escapeHtml(req.startedAt)}">Duration <b>${fmtDuration(req.startedAt)}</b></span>`
+    // Duration: wall-clock the pipeline spent on this REQ.
+    //   Live REQ:    now − startedAt (keeps ticking).
+    //   Merged REQ:  lastEnd − startedAt where lastEnd is the most recent
+    //                phase completion (or mergedAt fallback). This freezes
+    //                Duration at the moment the pipeline finished — a
+    //                REQ merged 3 days ago shouldn't read "Duration 3d 12h"
+    //                on the dashboard, it should read whatever the pipeline
+    //                actually took.
+    let durStr = '';
+    let durTitle = '';
+    if (req.startedAt) {
+      const startMs = Date.parse(req.startedAt);
+      if (Number.isFinite(startMs)) {
+        let endMs = Date.now();
+        let endSource = 'now (live)';
+        if (req.completed) {
+          // Pick the latest end-time we can prove from state. Order of
+          // preference: lastActivityAt (latest phaseHistory.completedAt) →
+          // any repos[*].mergedAt → fall back to "frozen at last poll".
+          // Reject any candidate that's <= startedAt — that's reconciler
+          // noise (the reconciler stamps a synthetic phaseHistory entry
+          // with startedAt=completedAt=NOW for ghost REQs, which would
+          // otherwise produce a 0m or negative Duration).
+          const candidates = [];
+          if (req.lastActivityAt) candidates.push({ ms: Date.parse(req.lastActivityAt), src: `last phase completion (${req.lastActivityAt})` });
+          for (const [, r] of Object.entries(req.repos || {})) {
+            if (r && typeof r.mergedAt === 'string') {
+              const m = Date.parse(r.mergedAt);
+              if (Number.isFinite(m)) candidates.push({ ms: m, src: `merge (${r.mergedAt})` });
+            }
+          }
+          const valid = candidates
+            .filter((c) => Number.isFinite(c.ms))
+            .filter((c) => c.ms > startMs);   // reject reconciler-synthetic timestamps
+          if (valid.length) {
+            valid.sort((a, b) => a.ms - b.ms);
+            const last = valid[valid.length - 1];
+            endMs = last.ms;
+            endSource = last.src;
+          } else {
+            // Reconciled ghost — no usable end timestamp distinct from
+            // startedAt. Don't render a misleading "0m" or "live now".
+            endMs = startMs;
+            endSource = 'reconciled (no telemetry available)';
+          }
+        }
+        durStr = fmtSpan(Math.max(0, endMs - startMs));
+        durTitle = req.completed
+          ? `Wall-clock for this pipeline run: startedAt=${escapeHtml(req.startedAt)} → ${escapeHtml(endSource)}. Frozen because the REQ has merged.`
+          : `Wall-clock since pipeline first started — startedAt=${escapeHtml(req.startedAt)}. Live counter; will freeze when the REQ merges.`;
+      }
+    }
+    const dur = durStr
+      ? `<span title="${durTitle}">Duration <b>${durStr}</b></span>`
       : '';
 
     // Active: real per-phase execution time when telemetry is available.
