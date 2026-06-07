@@ -686,20 +686,62 @@
   // entirely when no hook events have arrived yet — keeps the dashboard
   // clean for projects whose users haven't enabled hooks.
   function renderProjectSummary(project) {
-    const uw = project.userWait;
-    if (!uw) return '';
-    const hasData = uw.totalSec > 0 || uw.activeSessions > 0;
-    if (!hasData) return '';
+    const uw = project.userWait || { totalSec: 0, waitingSec: 0, waitingSessions: 0, activeSessions: 0, turns: 0 };
+
+    // Cumulative pipeline-execution time across every REQ in the project.
+    // Sums each REQ's per-phase Active span (req.activeMs) plus, for any
+    // REQ still in flight, the in-flight phase span (now - currentPhaseStartedAt).
+    // This is the same Active calculation each REQ card renders, just rolled
+    // up. Pipeline-only metric — does NOT include user wait.
+    const nowMs = Date.now();
+    let execMs = 0;
+    let reqsWithExec = 0;
+    for (const r of project.reqs || []) {
+      let ms = Number.isFinite(r.activeMs) ? r.activeMs : 0;
+      if (!r.completed && r.currentPhaseStartedAt) {
+        const t = Date.parse(r.currentPhaseStartedAt);
+        if (Number.isFinite(t)) ms += Math.max(0, nowMs - t);
+      }
+      if (ms > 0) reqsWithExec++;
+      execMs += ms;
+    }
+    const userWaitMs = (uw.totalSec || 0) * 1000 + (uw.waitingSec || 0) * 1000;
+    // "Total time" is execution + user wait — the wall-clock cost of moving
+    // every REQ in this project, regardless of who/what was the bottleneck.
+    // This is the metric the user asked for: how much elapsed time has the
+    // project consumed end-to-end across pipelines and user-input gaps.
+    const totalMs = execMs + userWaitMs;
+
+    const hasUserWaitData = uw.totalSec > 0 || uw.activeSessions > 0;
+    const hasExecData = execMs > 0;
+    if (!hasUserWaitData && !hasExecData) return '';
+
     const liveBit = uw.waitingSessions > 0
       ? `<span class="pill waiting" title="A Claude Code session is currently waiting for your input. Live counter; advances each second.">⏸ +${fmtSec(uw.waitingSec)} live (${uw.waitingSessions} session${uw.waitingSessions === 1 ? '' : 's'})</span>`
       : '';
+    const userWaitBit = hasUserWaitData
+      ? `<span class="pill userwait" title="Cumulative user-wait time across all sessions attributed to this project. Captured via Stop / UserPromptSubmit hooks; aggregated server-side.">⏸ User wait <b>${fmtSec(uw.totalSec)}</b> across ${uw.turns} turn${uw.turns === 1 ? '' : 's'}</span>`
+      : '';
+    const execBit = hasExecData
+      ? `<span class="pill running" title="Cumulative pipeline execution time across every REQ — the sum of per-phase active spans. Excludes idle gaps between phases and user wait.">⚡ Exec <b>${fmtSpan(execMs)}</b> across ${reqsWithExec} REQ${reqsWithExec === 1 ? '' : 's'}</span>`
+      : '';
+    const totalBit = (hasUserWaitData && hasExecData)
+      ? `<span class="pill stale" title="Total time = pipeline execution + user wait. The wall-clock cost of moving every REQ in this project end-to-end (includes ${fmtSpan(execMs)} exec + ${fmtSec(uw.totalSec)} user wait${uw.waitingSessions > 0 ? ` + ${fmtSec(uw.waitingSec)} live wait` : ''}).">⏱ Total <b>${fmtSpan(totalMs)}</b></span>`
+      : '';
+
+    const sessionLabel = uw.activeSessions
+      ? `${uw.activeSessions} session${uw.activeSessions === 1 ? '' : 's'} tracked`
+      : `${(project.reqs || []).length} REQ${(project.reqs || []).length === 1 ? '' : 's'}`;
+
     return `
       <section class="project-bar">
         <span class="label">Project</span>
         <b>${escapeHtml(project.name)}</b>
-        <span class="pill userwait" title="Cumulative user-wait time across all sessions attributed to this project. Click any REQ for per-REQ breakdown.">⏸ User wait <b>${fmtSec(uw.totalSec)}</b> across ${uw.turns} turn${uw.turns === 1 ? '' : 's'}</span>
+        ${execBit}
+        ${userWaitBit}
+        ${totalBit}
         ${liveBit}
-        <span class="label" style="margin-left:auto">${uw.activeSessions} session${uw.activeSessions === 1 ? '' : 's'} tracked</span>
+        <span class="label" style="margin-left:auto">${sessionLabel}</span>
       </section>
     `;
   }
