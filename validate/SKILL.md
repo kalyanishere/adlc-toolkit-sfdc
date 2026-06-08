@@ -96,3 +96,39 @@ Before proceeding, verify that `.adlc/specs/` exists. If it doesn't, stop and te
 - Architecture validated → "Ready for implementation"
 - Tasks validated → "Ready for implementation"
 - Implementation validated → "Ready for `/review`"
+
+### Step 5: Stamp the Validation Sidecar (dashboard signal)
+
+When validation passes (no Blockers remaining), write/update `.adlc/specs/<REQ-id>-*/validation-state.json` so the sprint dashboard can show the corresponding pipeline phase as green BEFORE `/proceed` runs. Schema is minimal — `completedPhases: number[]` + `phaseHistory: [{phase, name, completedAt}]`. Phase indices match `/proceed`'s canonical pipeline (1 = Spec, 2 = Architect, 3 = Tasks/Validate). Skip this step on `Implementation validated` — that phase is owned by `/proceed`.
+
+Add the corresponding phase index based on what was validated:
+- Spec validated → add `1` (name `"Spec"`)
+- Architecture validated → add `2` (name `"Architect"`)
+- Tasks validated → add `3` (name `"Validate"`)
+
+```bash
+SPEC_DIR=".adlc/specs/<REQ-id>-*"   # the directory you validated
+SIDECAR="$SPEC_DIR/validation-state.json"
+PHASE=<1|2|3>                        # per the mapping above
+NAME=<"Spec"|"Architect"|"Validate">
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mkdir -p "$SPEC_DIR"
+node -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const phase = Number(process.argv[2]);
+  const name = process.argv[3];
+  const now = process.argv[4];
+  let s = { completedPhases: [], phaseHistory: [] };
+  try { s = JSON.parse(fs.readFileSync(f, "utf8")); } catch (_) {}
+  if (!Array.isArray(s.completedPhases)) s.completedPhases = [];
+  if (!Array.isArray(s.phaseHistory)) s.phaseHistory = [];
+  if (!s.completedPhases.includes(phase)) s.completedPhases.push(phase);
+  s.completedPhases.sort((a,b) => a-b);
+  s.phaseHistory = s.phaseHistory.filter(h => h && h.phase !== phase);
+  s.phaseHistory.push({ phase, name, completedAt: now });
+  fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
+' "$SIDECAR" "$PHASE" "$NAME" "$NOW"
+```
+
+This file is read-only for `/proceed` — once `/proceed` runs and writes its own `pipeline-state.json`, the dashboard merges sidecar phases under live pipeline state (live state always wins on the same phase index).

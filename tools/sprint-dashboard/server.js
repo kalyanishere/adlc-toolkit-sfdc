@@ -186,11 +186,31 @@ function readTaskStrip(specDir) {
 // reconciler writes a finalized file to the main checkout.
 const lastKnownState = new Map();
 
+// Sidecar state written by `/spec`, `/architect`, and `/validate` so the
+// dashboard can show a REQ's spec/architecture phases as green BEFORE
+// `/proceed` runs. Schema is minimal:
+//   { completedPhases: number[], phaseHistory?: [{phase, name, completedAt}] }
+// Phase indices match the canonical pipeline (1=spec validated, 2=architect
+// validated). The dashboard merges this into the rendered state — pipeline
+// state always wins on conflict; sidecar only fills in phases /proceed
+// hasn't recorded yet.
+function readValidationSidecar(specDir) {
+  const f = path.join(specDir, 'validation-state.json');
+  const v = readJsonSafe(f);
+  if (!v || typeof v !== 'object') return null;
+  const completedPhases = Array.isArray(v.completedPhases)
+    ? v.completedPhases.filter((n) => Number.isInteger(n) && n >= 0 && n <= 8)
+    : [];
+  const phaseHistory = Array.isArray(v.phaseHistory) ? v.phaseHistory : [];
+  return { completedPhases, phaseHistory };
+}
+
 function projectReqState(specDir, opts = {}) {
   const id = path.basename(specDir).match(/^((?:[A-Z]+-)?REQ-\d+)/);
   const reqId = id ? id[1] : path.basename(specDir);
   const stateFile = path.join(specDir, 'pipeline-state.json');
   const state = readJsonSafe(stateFile);
+  const sidecar = readValidationSidecar(specDir);
   const cacheKey = `${opts.rootPath || ''}::${reqId}`;
 
   const title = readReqTitle(specDir);
@@ -219,20 +239,30 @@ function projectReqState(specDir, opts = {}) {
         staleReason: 'pipeline-state.json no longer present on disk; showing last observed snapshot. Run `tools/reconcile-pipeline-state/reconcile.sh` if the REQ has merged but the dashboard hasn\'t finalized.',
       };
     }
+    // No pipeline-state. If a validation sidecar is present (from /spec,
+    // /architect, /validate), surface its completed phases so the phase
+    // strip renders green for validated work even before /proceed kicks off.
+    const sideCompleted = sidecar?.completedPhases || [];
+    const sideHistory = sidecar?.phaseHistory || [];
+    const lastSideAt = sideHistory
+      .map((p) => (p && typeof p.completedAt === 'string') ? p.completedAt : null)
+      .filter(Boolean)
+      .sort()
+      .pop() || null;
     return {
       reqId,
       title,
-      hasState: false,
-      currentPhase: null,
+      hasState: sideCompleted.length > 0,
+      currentPhase: sideCompleted.length ? Math.min(8, Math.max(...sideCompleted) + 1) : null,
       completed: false,
       blockers: [],
       currentTask: null,
       failedTasks: [],
       completedTasks: [],
-      completedPhases: [],
-      lastPhase: null,
+      completedPhases: sideCompleted,
+      lastPhase: sideHistory.length ? sideHistory[sideHistory.length - 1] : null,
       startedAt: null,
-      lastActivityAt: null,
+      lastActivityAt: lastSideAt,
       currentPhaseStartedAt: null,
       activeMs: 0,
       hasPhaseTelemetry: false,
@@ -244,6 +274,7 @@ function projectReqState(specDir, opts = {}) {
       stalledSeconds: 0,
       stallThresholdSec: STALL_THRESHOLD_SEC,
       stale: false,
+      validationOnly: sideCompleted.length > 0,
     };
   }
 
@@ -390,6 +421,21 @@ function projectReqState(specDir, opts = {}) {
     }
   }
 
+  // Merge in any pre-/proceed validation sidecar phases. /spec, /architect,
+  // /validate write phases 1 and 2 here; if the live pipeline-state didn't
+  // record those (e.g. /proceed picked up mid-flow without seeing /validate's
+  // stamp), keep them green on the strip.
+  if (sidecar?.completedPhases?.length) {
+    const seen = new Set(completedPhases);
+    for (const p of sidecar.completedPhases) {
+      if (!seen.has(p) && p < (currentPhase ?? 9)) {
+        completedPhases.push(p);
+        seen.add(p);
+      }
+    }
+    completedPhases.sort((a, b) => a - b);
+  }
+
   const result = {
     reqId,
     title,
@@ -450,6 +496,16 @@ function projectReqState(specDir, opts = {}) {
 // Both attributions are recomputed every snapshot — a session's cwd never
 // actually changes (Claude Code processes don't chdir between turns), but
 // new sessions arrive constantly so it's cheaper to recompute than invalidate.
+//
+// Bucket key is `${session}::${cwd}`, NOT just `session`. Real-world hooks
+// frequently emit `session:"unknown"` (CLAUDE_SESSION_ID isn't always
+// exported into the hook's environment, especially for sub-agents and in
+// some shell variants). Without including cwd, every "unknown" event from
+// every project collapses into a single bucket whose cwd is whichever
+// project happened to fire the first event — and every other project
+// reports zeroed user-wait. Adding cwd to the key gives each project (and
+// each worktree) its own bucket, which is what the per-project /
+// per-REQ aggregation actually needs.
 
 const userWaitBySession = new Map();
 let userWaitOffset = 0;
@@ -477,7 +533,8 @@ function ingestUserWaitLog() {
     if (!ev || typeof ev.session !== 'string' || typeof ev.kind !== 'string') continue;
     const tsMs = Date.parse(ev.ts);
     if (!Number.isFinite(tsMs)) continue;
-    let s = userWaitBySession.get(ev.session);
+    const key = `${ev.session}::${ev.cwd || ''}`;
+    let s = userWaitBySession.get(key);
     if (!s) {
       s = {
         cwd: ev.cwd || '',
@@ -487,7 +544,7 @@ function ingestUserWaitLog() {
         totalIdleMs: 0,
         turnCount: 0,
       };
-      userWaitBySession.set(ev.session, s);
+      userWaitBySession.set(key, s);
     }
     if (ev.cwd && !s.cwd) s.cwd = ev.cwd;
     s.lastEventAt = tsMs;
