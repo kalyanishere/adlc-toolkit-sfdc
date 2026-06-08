@@ -91,9 +91,10 @@ The "Static-checkable?" column tells `tools/sf-lint/` which subset to mechanize.
 ### Anti-patterns (always block)
 
 - `View All Data` / `Modify All Data` granted in functional permission sets.
-- Object-level access without per-field FLS (object-blanket on a sensitive-data set).
+- **Any `<fieldPermissions>` block in a permission set** — framework policy is object-level access only (`viewAllFields=true` / `editAllFields=true` on `<objectPermissions>`). Per-field FLS is the #1 cause of deploy failures.
+- `<objectPermissions>` missing `viewAllFields=true` (or missing `editAllFields=true` when `allowEdit=true`).
 - **Read + Delete** combined on the same object in one set.
-- Sensitive data bundled with general feature access.
+- Sensitive data bundled with general feature access (split into a dedicated set with its own assignment policy; never gate via per-field FLS).
 
 ### Permission set groups
 

@@ -6,13 +6,13 @@ Catches deploy failures locally in seconds, before paying 60-90s per `sf project
 
 | Check | Script | Org-aware? | Wired into |
 |---|---|---|---|
-| `permsets` (REQ-B) | `check-permsets.mjs` | yes (Tooling API → FieldDefinition) | `generating-permission-set/SKILL.md`, `/canary` Step 2a |
+| `permsets` | `check-permsets.mjs` | yes (Tooling API → EntityDefinition) | `generating-permission-set/SKILL.md`, `/canary` Step 2a |
 | `metadata` (REQ-F) | `check-metadata.mjs` | no (workspace cross-reference) | `/canary` Step 2a |
 
 ## Usage
 
 ```sh
-# Perm-set FLS / required-field / formula / master-detail / missing-from-org
+# Perm-set policy: forbid <fieldPermissions>, require viewAllFields/editAllFields, verify objects exist
 sh tools/sf-preflight/check.sh permsets --workspace force-app --target-org my-sandbox
 
 # Same, offline (XML structure only — no Tooling API)
@@ -35,7 +35,7 @@ WARN-level findings (e.g. cross-package object references, missing-custom-field 
 
 ## Cache
 
-Org describe responses are cached at `.adlc/.cache/org-fields.<alias>.json` for the run. Delete the file to force a refresh.
+Org existence-check responses are cached at `.adlc/.cache/org-objects.<alias>.json` for the run. Delete the file to force a refresh.
 
 ## Adding a new check
 

@@ -49,7 +49,7 @@ For each touched file, walk its loaded rubric end-to-end. Score yourself against
 - generating-apex (150-pt) — bulkification, sharing, security, testing, maintainability
 - generating-lwc-components (165-pt) — wire, SLDS, accessibility, performance, Jest
 - generating-flow (110-pt) — bulk safety, fault paths, subflow orchestration
-- generating-permission-set (120-pt) — naming, anti-patterns, FLS, group composition
+- generating-permission-set (120-pt) — naming, anti-patterns, object-level access (viewAllFields/editAllFields, NO `<fieldPermissions>`), group composition
 - querying-soql (100-pt) — selectivity, indexing, USER_MODE
 - testing-agentforce (100-pt) — multi-turn validation, topic/action coverage
 - (and the rest of the rubrics per the catalog)

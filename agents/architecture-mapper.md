@@ -133,7 +133,7 @@ For each touched layer, name the sf-skill rubric per `.adlc/context/sf-skills-ca
 
 ### Security impact
 - New permission set `SalesApp_Account_Tier_Update` for the restricted writers persona
-- Existing `SalesApp_Account_Read` extended with field Tier__c (FLS Read)
+- Existing `SalesApp_Account_Read` already grants object-level access (viewAllFields=true) — Tier__c is automatically visible, no perm-set update needed
 - Permissions.md needs to be regenerated (use templates/permissions-template.md)
 
 ### Integration impact

@@ -40,8 +40,8 @@ Non-negotiable from salesforce-rules.md:
 - **Sanitize user inputs** — bind variables in SOQL, escape in dynamic SOQL, no string concatenation
 - **No @future** — use queueables with `System.Finalizer`
 - **No `View All Data` / `Modify All Data`** in functional permission sets
-- **Field-level security per-field**, not object-blanket
-- **Separate permission sets** for sensitive data
+- **Object-level access only** — every `<objectPermissions>` has `viewAllFields=true` (plus `editAllFields=true` when `allowEdit=true`); **NO `<fieldPermissions>` blocks** (framework policy)
+- **Separate permission sets** for sensitive data (gate by which set the persona receives, never via per-field FLS in a shared set)
 - **No combined Read+Delete** on the same object in one set
 - **Permission set naming**: `[AppPrefix]_[Component]_[AccessLevel]` (AppPrefix from `.adlc/config.yml` `salesforce.app_prefix`)
 - **Named Credentials** for every callout — no hardcoded URLs/tokens
@@ -84,8 +84,9 @@ Non-negotiable from salesforce-rules.md:
 
 ### Anti-patterns
 - **`View All Data` / `Modify All Data`** — Critical if granted in a functional permission set
-- **Object-level access** without per-field FLS (object-blanket access in a sensitive-data set)
-- **Sensitive data bundled** with general feature access (e.g., a "Sales User" set granting access to `SSN__c`)
+- **Any `<fieldPermissions>` block** — Critical: framework policy is object-level access only. Per-field FLS is the #1 cause of deploy failures and is forbidden by this framework. Remediation: delete the `<fieldPermissions>` block; if the persona truly should not see a field, route them through a different permission set or use sharing/encryption
+- **`<objectPermissions>` missing `viewAllFields=true`** (or missing `editAllFields=true` when `allowEdit=true`) — High: persona will silently lack visibility into eligible fields on the object
+- **Sensitive data bundled** with general feature access (e.g., a "Sales User" set granting access to a sensitive object) — split into a dedicated set with its own assignment policy
 - **Read + Delete** combined on the same object in one set
 
 ### Permissions.md completeness

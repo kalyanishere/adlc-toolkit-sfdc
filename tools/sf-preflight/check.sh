@@ -16,7 +16,7 @@ case "$CHECK" in
   -h|--help|"")
     cat <<EOF
 Usage: $0 <check> [options]
-  permsets   FLS / required-field / formula / master-detail validation (REQ-B)
+  permsets   Object-level access policy (forbid <fieldPermissions>, require viewAllFields/editAllFields)
   metadata   Cross-reference / object / layout / record-type validation (REQ-F)
 EOF
     exit 0

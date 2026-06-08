@@ -1,19 +1,30 @@
 #!/usr/bin/env node
-// REQ-B: Permission-set FLS pre-flight.
+// Permission-set policy pre-flight.
 //
-// For every `.permissionset-meta.xml` under the workspace, validate that every
-// <fieldPermissions> entry is FLS-eligible against the target org. Salesforce
-// rejects FLS on required / formula / master-detail / auto-number fields, plus
-// any field that doesn't exist in the org. Catching these locally is ~1-3
-// seconds; catching them via `sf project deploy validate` is ~60-90 seconds
-// per round trip.
+// Framework policy: permission sets grant access at the OBJECT level using
+// <objectPermissions> with viewAllFields=true (and editAllFields=true when
+// allowEdit=true). They MUST NOT contain any <fieldPermissions> blocks.
+//
+// Per-field FLS in PermissionSet XML is the #1 cause of deploy failures
+// (required / formula / master-detail / auto-number / compound / system
+// fields are FLS-ineligible and reject deploy). Restrict access via
+// separate permission sets, sharing, or encryption — never via
+// <fieldPermissions>.
+//
+// This script BLOCKS when:
+//   - any <fieldPermissions> block is present
+//   - any <objectPermissions> block is missing <viewAllFields>true
+//     (or missing <editAllFields>true when allowEdit=true)
+//   - <userPermissions> grants ViewAllData or ModifyAllData
+//   - (online mode) any object referenced in <objectPermissions> doesn't
+//     exist in the target org
 //
 // Usage:
 //   node tools/sf-preflight/check-permsets.mjs \
 //     --workspace force-app \
 //     --target-org <alias> \
 //     [--cache-dir .adlc/.cache] \
-//     [--offline]                 # parse only — skip the Tooling API call
+//     [--offline]                 # parse only — skip the org existence check
 //     [--json]                    # emit machine-readable findings
 //
 // Exit codes:
@@ -23,7 +34,7 @@
 
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, basename, dirname } from "node:path";
+import { join } from "node:path";
 
 // --- arg parsing ----------------------------------------------------------
 
@@ -86,9 +97,16 @@ if (permSetFiles.length === 0) {
   process.exit(0);
 }
 
-// --- parse <fieldPermissions> blocks -------------------------------------
-// Tag-based parsing — avoids pulling a heavy XML dependency. Salesforce metadata
-// is line-oriented and consistent.
+// --- block-level parsers --------------------------------------------------
+// Tag-based parsing — avoids pulling a heavy XML dependency. Salesforce
+// metadata is line-oriented and consistent.
+
+function indexOfWithLine(xml, idx) {
+  // 1-based line number for an offset in the source.
+  let line = 1;
+  for (let i = 0; i < idx && i < xml.length; i++) if (xml.charCodeAt(i) === 10) line++;
+  return line;
+}
 
 function parseFieldPermissions(xml) {
   const blocks = [];
@@ -101,50 +119,154 @@ function parseFieldPermissions(xml) {
       return t ? t[1].trim() : null;
     };
     blocks.push({
-      field: get("field"),                     // "Account.SSN__c"
+      field: get("field"),
       readable: get("readable") === "true",
       editable: get("editable") === "true",
+      line: indexOfWithLine(xml, m.index),
     });
   }
   return blocks;
 }
 
-const findings = [];   // {file, severity, type, message, field?, object?}
-const fieldsByObject = new Map();   // object → Set<field>
+function parseObjectPermissions(xml) {
+  const blocks = [];
+  const re = /<objectPermissions>([\s\S]*?)<\/objectPermissions>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const body = m[1];
+    const get = (tag) => {
+      const t = new RegExp(`<${tag}>([^<]*)<\\/${tag}>`).exec(body);
+      return t ? t[1].trim() : null;
+    };
+    const bool = (tag) => get(tag) === "true";
+    blocks.push({
+      object: get("object"),
+      allowCreate: bool("allowCreate"),
+      allowRead: bool("allowRead"),
+      allowEdit: bool("allowEdit"),
+      allowDelete: bool("allowDelete"),
+      viewAllFields: bool("viewAllFields"),
+      editAllFields: bool("editAllFields"),
+      viewAllRecords: bool("viewAllRecords"),
+      modifyAllRecords: bool("modifyAllRecords"),
+      line: indexOfWithLine(xml, m.index),
+    });
+  }
+  return blocks;
+}
+
+function parseUserPermissions(xml) {
+  const blocks = [];
+  const re = /<userPermissions>([\s\S]*?)<\/userPermissions>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const body = m[1];
+    const get = (tag) => {
+      const t = new RegExp(`<${tag}>([^<]*)<\\/${tag}>`).exec(body);
+      return t ? t[1].trim() : null;
+    };
+    blocks.push({
+      name: get("name"),
+      enabled: get("enabled") === "true",
+      line: indexOfWithLine(xml, m.index),
+    });
+  }
+  return blocks;
+}
+
+const findings = [];   // {file, severity, type, message, ...}
+const objectsReferenced = new Set();
 
 for (const file of permSetFiles) {
   let xml;
   try { xml = readFileSync(file, "utf8"); }
   catch (e) { findings.push({ file, severity: "error", type: "read-error", message: e.message }); continue; }
+
+  // (1) Forbid <fieldPermissions> entirely.
   const fps = parseFieldPermissions(xml);
   for (const fp of fps) {
-    if (!fp.field || !fp.field.includes(".")) {
+    findings.push({
+      file, severity: "block", type: "field-permissions-forbidden",
+      field: fp.field || "(unspecified)",
+      line: fp.line,
+      message: `<fieldPermissions> block at line ${fp.line} (${fp.field || "unspecified field"}) — framework policy is object-level access only. Delete this block. If the persona must not see this field, route them through a different permission set, or use sharing/encryption. Per-field FLS in PermissionSet XML is the #1 cause of deploy failures.`,
+    });
+  }
+
+  // (2) Object permissions must use viewAllFields/editAllFields.
+  const ops = parseObjectPermissions(xml);
+  let opCount = 0;
+  let hasRead = new Set();
+  let hasDelete = new Set();
+  for (const op of ops) {
+    if (!op.object) continue;
+    opCount++;
+    objectsReferenced.add(op.object);
+    if (op.allowRead) hasRead.add(op.object);
+    if (op.allowDelete) hasDelete.add(op.object);
+
+    if (!op.viewAllFields) {
       findings.push({
-        file, severity: "block", type: "malformed-field-ref",
-        message: `<fieldPermissions> with missing or unqualified <field> entry: ${JSON.stringify(fp)}`,
+        file, severity: "block", type: "missing-view-all-fields",
+        object: op.object, line: op.line,
+        message: `<objectPermissions> for ${op.object} (line ${op.line}) is missing <viewAllFields>true. Framework policy: object-level access uses viewAllFields=true so all eligible fields are visible without per-field FLS.`,
       });
-      continue;
     }
-    const [object, field] = fp.field.split(".", 2);
-    if (!fieldsByObject.has(object)) fieldsByObject.set(object, new Set());
-    fieldsByObject.get(object).add(field);
-    // stash for the rule pass below
-    fp.__file = file;
-    fp.__object = object;
-    fp.__field = field;
+    if (op.allowEdit && !op.editAllFields) {
+      findings.push({
+        file, severity: "block", type: "missing-edit-all-fields",
+        object: op.object, line: op.line,
+        message: `<objectPermissions> for ${op.object} (line ${op.line}) sets allowEdit=true but is missing <editAllFields>true. Edit access at the object level requires editAllFields=true.`,
+      });
+    }
+    if (op.modifyAllRecords || op.viewAllRecords) {
+      findings.push({
+        file, severity: "warn", type: "wide-record-access",
+        object: op.object, line: op.line,
+        message: `<objectPermissions> for ${op.object} grants viewAllRecords/modifyAllRecords. Confirm this is intentional — these bypass sharing.`,
+      });
+    }
+  }
+  // Read+Delete combined on the same object — split.
+  for (const obj of hasRead) {
+    if (hasDelete.has(obj)) {
+      findings.push({
+        file, severity: "block", type: "read-and-delete-combined",
+        object: obj,
+        message: `${obj} grants both Read and Delete in the same permission set. Split into two sets.`,
+      });
+    }
+  }
+  if (opCount > 10) {
+    findings.push({
+      file, severity: "block", type: "too-many-objects",
+      message: `${opCount} <objectPermissions> blocks in one set; framework policy caps at 10. Split into multiple sets.`,
+    });
+  }
+
+  // (3) Reject ViewAllData / ModifyAllData in functional sets.
+  const ups = parseUserPermissions(xml);
+  for (const up of ups) {
+    if (!up.enabled) continue;
+    if (up.name === "ViewAllData" || up.name === "ModifyAllData") {
+      findings.push({
+        file, severity: "block", type: "view-or-modify-all-data",
+        line: up.line,
+        message: `<userPermissions> grants ${up.name} (line ${up.line}). Framework policy forbids this in functional permission sets — use object-level permissions instead.`,
+      });
+    }
   }
 }
 
-// --- query the org (or load from cache) ----------------------------------
+// --- (online) verify objects exist in target org -------------------------
 
 mkdirSync(opts.cacheDir, { recursive: true });
-const cacheKey = (org) => join(opts.cacheDir, `org-fields.${org || "offline"}.json`);
+const cacheKey = (org) => join(opts.cacheDir, `org-objects.${org || "offline"}.json`);
 
-function describeFromOrg(object) {
-  // Pull eligibility-relevant attributes from FieldDefinition for one object.
-  const q = `SELECT QualifiedApiName, IsCalculated, IsAutoNumber, IsCompound, ` +
-            `DataType, ValueTypeId, IsNillable, IsCreatable, IsUpdatable ` +
-            `FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName='${object}'`;
+function objectExistsInOrg(object) {
+  // Light Tooling API check — EntityDefinition has one row per addressable
+  // SObject in the org (standard + custom). Fast and authoritative.
+  const q = `SELECT QualifiedApiName FROM EntityDefinition WHERE QualifiedApiName='${object}'`;
   let raw;
   try {
     raw = execFileSync(
@@ -169,147 +291,32 @@ function describeFromOrg(object) {
     });
     return null;
   }
-  return parsed.result?.records || [];
+  return (parsed.result?.records || []).length > 0;
 }
 
-let orgFields = {};
-if (opts.offline) {
-  if (!opts.json) console.error("(--offline mode: skipping Tooling API; reporting only XML-derived findings)");
-} else {
+if (!opts.offline) {
   const cacheFile = cacheKey(opts.targetOrg);
+  let orgObjects = {};
   if (existsSync(cacheFile)) {
-    try { orgFields = JSON.parse(readFileSync(cacheFile, "utf8")); }
-    catch { orgFields = {}; }
+    try { orgObjects = JSON.parse(readFileSync(cacheFile, "utf8")); }
+    catch { orgObjects = {}; }
   }
-  for (const object of fieldsByObject.keys()) {
-    if (orgFields[object]) continue;
-    const records = describeFromOrg(object);
-    if (records === null) continue;
-    const map = {};
-    for (const r of records) {
-      map[r.QualifiedApiName] = {
-        isCalculated: !!r.IsCalculated,
-        isAutoNumber: !!r.IsAutoNumber,
-        isCompound: !!r.IsCompound,
-        dataType: r.DataType || "",
-        valueTypeId: r.ValueTypeId || "",
-        isNillable: r.IsNillable !== false,
-        isCreatable: !!r.IsCreatable,
-        isUpdatable: !!r.IsUpdatable,
-      };
-    }
-    orgFields[object] = map;
-  }
-  try { writeFileSync(cacheFile, JSON.stringify(orgFields, null, 2)); } catch {}
-}
-
-// --- apply the FLS-eligibility rules -------------------------------------
-
-// System / audit-managed fields are platform-controlled and NEVER eligible
-// for FLS regardless of object. Listing any of them in <fieldPermissions>
-// fails deploy with "Field <X> is not eligible for FLS" or similar. This
-// list is checked BEFORE the org describe so it works in --offline mode
-// (no Tooling API call needed to know `Id` isn't FLS-eligible).
-const SYSTEM_FIELDS = new Set([
-  "Id",
-  "CreatedById",
-  "CreatedDate",
-  "LastModifiedById",
-  "LastModifiedDate",
-  "SystemModstamp",
-  "IsDeleted",
-  "OwnerId",
-  "LastActivityDate",
-  "LastViewedDate",
-  "LastReferencedDate",
-  "RecordTypeId",
-  "MayEdit",
-  "IsLocked",
-  "ConnectionReceivedId",
-  "ConnectionSentId",
-]);
-// Compound fields (Address, Name on Person Account/Lead/Contact) — FLS is
-// set on the *components* (Street, City, FirstName, LastName), never the
-// composite. Detected primarily by IsCompound from FieldDefinition, but
-// also by name as a belt-and-suspenders check for offline runs and APIs
-// that don't surface IsCompound consistently.
-const COMPOUND_FIELD_NAMES = new Set([
-  "Address", "BillingAddress", "ShippingAddress",
-  "MailingAddress", "OtherAddress",
-  "Name",  // PersonAccount/Lead/Contact composite — only flag when isCompound is also true
-]);
-
-for (const file of permSetFiles) {
-  const xml = readFileSync(file, "utf8");
-  const fps = parseFieldPermissions(xml);
-  for (const fp of fps) {
-    if (!fp.field || !fp.field.includes(".")) continue;   // already flagged
-    const [object, field] = fp.field.split(".", 2);
-
-    // System / audit fields — fail fast, no org describe needed.
-    if (SYSTEM_FIELDS.has(field)) {
+  for (const object of objectsReferenced) {
+    if (object in orgObjects) continue;
+    const exists = objectExistsInOrg(object);
+    if (exists === null) continue;
+    orgObjects[object] = exists;
+    if (!exists) {
       findings.push({
-        file, severity: "block", type: "system-field",
-        field: fp.field,
-        message: `${fp.field} is a system / audit-managed field. The platform always controls access to these — listing them in <fieldPermissions> fails deploy. Remove the entry; the platform grants the appropriate access automatically.`,
-      });
-      continue;
-    }
-
-    const desc = orgFields[object]?.[field];
-    if (!desc && !opts.offline) {
-      findings.push({
-        file, severity: "block", type: "field-not-in-org",
-        field: fp.field,
-        message: `${fp.field} not found in target org. Either it doesn't exist, the user lacks access to FieldDefinition for it, or there's a namespace mismatch.`,
-      });
-      continue;
-    }
-    if (!desc) continue;
-    // Compound fields: FLS belongs on the components, not the composite.
-    if (desc.isCompound || COMPOUND_FIELD_NAMES.has(field)) {
-      findings.push({
-        file, severity: "block", type: "compound-field",
-        field: fp.field,
-        message: `${fp.field} is a compound field. FLS must be set on the component fields (e.g. Street, City for Address), not on the composite. Remove this <fieldPermissions> entry.`,
-      });
-      continue;
-    }
-    // Master-detail: never eligible for FLS.
-    if (desc.dataType === "MasterDetail") {
-      findings.push({
-        file, severity: "block", type: "master-detail",
-        field: fp.field,
-        message: `${fp.field} is a master-detail relationship. FLS cannot be set on master-detail fields; remove the <fieldPermissions> entry.`,
-      });
-      continue;
-    }
-    // Auto-number: editable must be false.
-    if (desc.isAutoNumber && fp.editable) {
-      findings.push({
-        file, severity: "block", type: "auto-number-editable",
-        field: fp.field,
-        message: `${fp.field} is auto-number; editable must be false.`,
-      });
-    }
-    // Formula (calculated): editable must be false.
-    if (desc.isCalculated && fp.editable) {
-      findings.push({
-        file, severity: "block", type: "formula-editable",
-        field: fp.field,
-        message: `${fp.field} is a formula field; editable must be false (read-only by definition).`,
-      });
-    }
-    // Required field — Salesforce treats Nillable=false + IsCreatable=true as
-    // "required on insert"; FLS on truly required fields fails deploy.
-    if (desc.isNillable === false && desc.isCreatable && desc.isUpdatable) {
-      findings.push({
-        file, severity: "block", type: "required-field",
-        field: fp.field,
-        message: `${fp.field} is required (IsNillable=false). Required fields cannot have FLS — remove the <fieldPermissions> entry. The platform always grants access to required fields.`,
+        file: "(org)", severity: "block", type: "object-not-in-org",
+        object,
+        message: `${object} is referenced in <objectPermissions> but not found in target org. Either it doesn't exist, the user lacks access, or there's a namespace mismatch.`,
       });
     }
   }
+  try { writeFileSync(cacheFile, JSON.stringify(orgObjects, null, 2)); } catch {}
+} else if (!opts.json) {
+  console.error("(--offline mode: skipping org existence check; reporting only XML-derived findings)");
 }
 
 // --- emit results --------------------------------------------------------
@@ -319,13 +326,13 @@ if (opts.json) {
     workspace: opts.workspace,
     targetOrg: opts.targetOrg,
     permSetCount: permSetFiles.length,
-    objectsCheckedAgainstOrg: opts.offline ? [] : Object.keys(orgFields),
+    objectsReferenced: [...objectsReferenced],
     findings,
   }, null, 2));
   process.stdout.write("\n");
 } else {
   if (findings.length === 0) {
-    console.log(`✓ ${permSetFiles.length} permission set(s) clean — no FLS issues detected.`);
+    console.log(`✓ ${permSetFiles.length} permission set(s) clean — object-level access policy satisfied, no <fieldPermissions> blocks.`);
   } else {
     const groups = new Map();
     for (const f of findings) {
@@ -337,12 +344,13 @@ if (opts.json) {
       console.log(`### ${file}`);
       for (const f of fs) {
         const tag = `[${f.severity.toUpperCase()}]`;
-        const fld = f.field ? ` (${f.field})` : f.object ? ` (${f.object})` : "";
-        console.log(`  ${tag} ${f.type}${fld}: ${f.message}`);
+        const ctx = f.field ? ` (${f.field})` : f.object ? ` (${f.object})` : "";
+        console.log(`  ${tag} ${f.type}${ctx}: ${f.message}`);
       }
       console.log();
     }
   }
 }
 
-process.exit(findings.length > 0 ? 1 : 0);
+const blocking = findings.filter(f => f.severity === "block" || f.severity === "error").length;
+process.exit(blocking > 0 ? 1 : 0);

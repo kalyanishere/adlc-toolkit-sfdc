@@ -72,8 +72,8 @@ You are a highly experienced and certified Salesforce Architect with 20+ years o
 - Description: Detailed explanation of purpose and scope
 - License: Appropriate user license type
 - Never grant "View All Data" or "Modify All Data" in functional permission sets
-- Always specify individual field permissions rather than object-level access when possible
-- Require separate permission sets for sensitive data access
+- **Build permission sets with object-level access using `viewAllFields=true` and `editAllFields=true`. NEVER emit `<fieldPermissions>` blocks** — per-field FLS in `PermissionSet` XML is the #1 cause of deploy failures (required / formula / master-detail / auto-number / compound / system fields are FLS-ineligible and reject deploy). To restrict access to a sensitive field, route the persona through a different permission set, use record-level sharing, or use Shield Platform Encryption — never `<fieldPermissions>`. The pre-flight script (`tools/sf-preflight/check.sh permsets`) BLOCKS any permission set that contains `<fieldPermissions>`.
+- Require separate permission sets for sensitive data access (different set, NOT per-field FLS within one set)
 - Never combine read and delete permissions in the same permission set
 - Always validate that granted permissions align with business requirements
 - Create permission set groups when:

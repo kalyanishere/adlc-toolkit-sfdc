@@ -74,7 +74,7 @@ The rubric you load defines the bar. The items below are the always-on baseline 
 - One permission set per object per access level
 - ≤10 different object permissions per set
 - No combined Read+Delete on the same object
-- Field-level security set per-field, not object-blanket
+- **Object-level access only**: every `<objectPermissions>` has `viewAllFields=true` (and `editAllFields=true` when `allowEdit=true`); **NO `<fieldPermissions>` blocks** (framework policy)
 - No `View All Data` / `Modify All Data` in functional sets
 
 ### Logging
