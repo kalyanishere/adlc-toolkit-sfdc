@@ -49,6 +49,37 @@ fi
 
 This step is idempotent and never destructive — it only runs `git init` when there is no existing git context, and never touches an existing one. After this step every subsequent step can safely assume a working `.git/` and a sane default branch.
 
+### Step 1.6: Scaffold Claude Code Permissions Allowlist (FIRST — before everything else)
+
+This is intentionally hoisted before every other Bash-using step. The permissions allowlist must be in place **before** the rest of `/init` runs `mkdir`, `cp`, `sed`, `awk`, `node`, etc. — otherwise every subsequent step interactively prompts for the permission its allowlist was supposed to grant. Running this after Step 2/3/4 turns `/init` into a 30-prompt experience; running it here makes the rest of the run silent.
+
+```bash
+# Verify source exists
+if [ ! -f ~/.claude/skills/templates/claude-settings-template.json ]; then
+  echo "ERROR: Settings template not found at ~/.claude/skills/templates/claude-settings-template.json. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
+  exit 1
+fi
+
+# Ensure destination directory exists
+mkdir -p .claude
+
+# Idempotent copy: only copy if destination does not already exist
+if [ ! -f .claude/settings.json ]; then
+  cp ~/.claude/skills/templates/claude-settings-template.json .claude/settings.json
+  echo "Created .claude/settings.json from canonical template (Step 1.6 — early scaffold)."
+else
+  echo "Preserved existing .claude/settings.json (idempotent — not overwritten)."
+fi
+```
+
+The template pre-approves the routine `git`, `gh`, `npm`, Read/Write/Edit, and agent-dispatch operations the ADLC pipeline fires. Destructive operations (`rm -rf`, `git reset --hard`, `gh pr merge`, `./deploy.sh`, `terraform apply/destroy`, force-push to `main`) remain on the **ask** list so a human still confirms the one-way moves. Customize for project-specific commands (e.g., add `Bash(cd app && ./deploy.sh:*)` for iOS deploys) by editing `.claude/settings.json` directly.
+
+The template also wires two Claude Code hooks (`Stop` and `UserPromptSubmit`) that emit one JSONL event per turn boundary to `~/.adlc/runtime/user-wait.jsonl`. The sprint dashboard tails this log to compute per-REQ "user wait" idle time. Zero overhead when the dashboard isn't running.
+
+**Reload prompt note for the user.** Claude Code reads `.claude/settings.json` at session start. When a session is *already running* and `/init` writes a new `settings.json`, the in-flight session keeps its previous permission set — the allowlist takes effect on the next session. For the rest of *this* `/init` run, you may still see permission prompts for some commands; subsequent skills (`/spec`, `/architect`, `/proceed`, `/sprint`) launched in a fresh session will be silent. Tell the user: "`.claude/settings.json` was scaffolded; **commit this file** (team-shared). To benefit immediately for the rest of `/init`, accept the prompts as they appear — or restart Claude Code in this directory and re-run `/init`, which is fully idempotent. Use `.claude/settings.local.json` (gitignored by Claude Code) for personal overrides."
+
+If `.claude/settings.json` was preserved as-is, run the Step 8.5 hook backfill below now (don't wait for Step 8.5) — same idempotent merge logic.
+
 ### Step 2: Gather Project Context
 Ask the user for the following (skip any that are already known from existing files):
 1. **Project name** — What is this project called?
@@ -316,36 +347,20 @@ fi
 
 Skip this step entirely for non-Salesforce projects (no `salesforce:` block in `.adlc/config.yml` and no `force-app/` directory). For Salesforce projects, this step is mandatory — the architect cannot reason about UI Bundles, OmniStudio, Data Cloud, or Agentforce scaffolding without the catalog.
 
-### Step 8: Scaffold Claude Code Permissions Allowlist
+### Step 8: (moved to Step 1.6 — verify only)
 
-Copy the canonical Claude Code settings template to `.claude/settings.json` so `/proceed` (and every other skill in this toolkit) can run end-to-end without prompting for permission on every routine `git`, `gh`, test, and agent-dispatch operation. This is the single biggest mitigation against per-phase gating in long-running pipelines.
-
-**This step is idempotent — skip if the file already exists** (preserve any project-local customizations).
+The settings allowlist scaffold now runs at Step 1.6, before the bulk of `/init`'s shell work, so subsequent steps don't trigger permission prompts. This step is now a verification gate: confirm `.claude/settings.json` exists. If it doesn't (e.g., Step 1.6 was skipped or hand-removed), run the Step 1.6 scaffold block now — same idempotent logic.
 
 ```bash
-# Verify source exists
-if [ ! -f ~/.claude/skills/templates/claude-settings-template.json ]; then
-  echo "ERROR: Settings template not found at ~/.claude/skills/templates/claude-settings-template.json. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
-  exit 1
-fi
-
-# Ensure destination directory exists
-mkdir -p .claude
-
-# Idempotent copy: only copy if destination does not already exist
 if [ ! -f .claude/settings.json ]; then
+  echo "WARN: .claude/settings.json missing — Step 1.6 should have created it. Re-running scaffold."
+  mkdir -p .claude
   cp ~/.claude/skills/templates/claude-settings-template.json .claude/settings.json
-  echo "Created .claude/settings.json from canonical template."
+  echo "Created .claude/settings.json from canonical template (late fallback)."
 else
-  echo "Preserved existing .claude/settings.json (idempotent — not overwritten)."
+  echo "Verified .claude/settings.json present (created in Step 1.6)."
 fi
 ```
-
-The template pre-approves the routine `git`, `gh`, `npm`, Read/Write/Edit, and agent-dispatch operations the ADLC pipeline fires. Destructive operations (`rm -rf`, `git reset --hard`, `gh pr merge`, `./deploy.sh`, `terraform apply/destroy`, force-push to `main`) remain on the **ask** list so a human still confirms the one-way moves. Customize for project-specific commands (e.g., add `Bash(cd app && ./deploy.sh:*)` for iOS deploys) by editing `.claude/settings.json` directly.
-
-The template also wires two Claude Code hooks (`Stop` and `UserPromptSubmit`) that emit one JSONL event per turn boundary to `~/.adlc/runtime/user-wait.jsonl`. The sprint dashboard tails this log to compute per-REQ "user wait" idle time (gap between Claude finishing a turn and you submitting the next prompt). Zero overhead when the dashboard isn't running — the file is just append-only JSONL.
-
-Advise the user: "`.claude/settings.json` was scaffolded with a default allowlist plus user-wait hooks. Commit this file — it is team-shared. Use `.claude/settings.local.json` (gitignored by Claude Code) for personal overrides."
 
 ### Step 8.5: Backfill user-wait hooks into pre-existing settings
 
