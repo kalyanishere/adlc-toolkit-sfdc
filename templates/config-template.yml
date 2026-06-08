@@ -1,139 +1,27 @@
-# .adlc/config.yml — ADLC Salesforce project configuration
-#
-# This file lives in every Salesforce repo that originates REQs. "Primary" is
-# per-REQ, not a fixed designation: whichever repo you invoke /proceed from
-# becomes the primary for that REQ, so every repo that can host REQs needs its
-# own `.adlc/` (from /init) and its own config.yml.
-#
-# Single-repo SF projects (the common case — one DX project) can leave the
-# `repos:` block with a single entry. All ADLC skills fall back to legacy
-# single-repo behavior when only one entry is declared.
-#
-# ---------------------------------------------------------------------------
-# QUICKSTART: copy a preset
-# ---------------------------------------------------------------------------
-# The fastest way to fill this in is to start from a preset that matches your
-# stack, then replace the placeholder values.
-#
-#   cp ~/.claude/skills/presets/sfdc-core.yml .adlc/config.yml
-#
-# Available presets (see ~/.claude/skills/presets/):
-#   - sfdc-core.yml        — Apex + LWC + Flow + SOQL + Permissions + Deploy
-#   - sfdc-industries.yml  — sfdc-core + Data Cloud, Agentforce, OmniStudio,
-#                            Industries CME EPC, Vlocity build/deploy
-#
-# If no preset matches, fill out the sections below from scratch.
-
-# ---------------------------------------------------------------------------
-# project: Display name and (optional) preset reference.
-# ---------------------------------------------------------------------------
-# `name`      — shown in skill output and PR/commit metadata.
-# `shortname` — REQUIRED. Exactly 3 uppercase letters (`^[A-Z]{3}$`). Used to
-#               namespace ADLC IDs as `<SHORT>-REQ-NNN`, `<SHORT>-BUG-NNN`,
-#               `<SHORT>-LESSON-NNN`. Skills hard-fail when this is missing.
-#               Pick something unique across every repo on your machine — once
-#               specs exist, changing it requires a migration. Examples:
-#               SFC = Salesforce Customer-360, ORD = Order Management,
-#               PRT = Partner Portal.
-# `preset`    — informational only: records which preset (if any) this config
-#               was seeded from. Skills don't read it; it's a hint for
-#               `/template-drift`.
+# .adlc/config.yml — ADLC Salesforce project configuration.
+# Defaults filled in by /init. Edit only to deviate.
 
 project:
   name: "My Salesforce Project"
-  shortname: "XYZ"               # 3 uppercase letters, REQUIRED
-  # preset: sfdc-core
-
-# ---------------------------------------------------------------------------
-# salesforce: Salesforce-specific identity and policy values.
-# ---------------------------------------------------------------------------
-# These are the values salesforce-rules.md depends on at runtime. Skills read
-# them when generating Apex, permission sets, deploy commands, etc.
-#
-#   app_prefix         — 3–8 character PascalCase identifier used in permission
-#                        set naming: [AppPrefix]_[Component]_[AccessLevel].
-#                        Example: SalesApp -> SalesApp_Opportunity_Read
-#   api_version        — Salesforce API version floor. salesforce-rules.md
-#                        mandates 66.0+ for any Agentforce/AI metadata.
-#   org_alias          — Default sf CLI alias (sf org list). Skills will
-#                        target this org for sf data, sf agent, sf data360
-#                        invocations unless overridden.
-#   package_directories — Repo-relative paths that hold metadata. Mirrors
-#                        sfdx-project.json's packageDirectories; used by
-#                        /architect to scope the change set.
-#   agentforce_variant — Employee | Service. Determines deploy gate, persona
-#                        shape, and whether a dedicated Einstein Agent User +
-#                        system permission set is required. Omit when
-#                        Agentforce is not in scope.
-#   industries         — Opt-in flags for advanced surface areas. Skills
-#                        branch on this to wire (or skip) the relevant
-#                        sf-skills rubrics.
-#   features           — Per-org beta / pilot feature toggles. Currently:
-#                        `ui_bundles` (multi-framework React apps via
-#                        `sf template generate ui-bundle`). Skills check
-#                        these flags before suggesting beta-only paths.
+  shortname: "XYZ"               # 3 uppercase letters; namespaces all REQ/BUG/LESSON ids
 
 salesforce:
-  app_prefix: "<AppPrefix>"          # 3–8 chars, PascalCase
-  api_version: "66.0"                # 66.0+ required for Agentforce
-  org_alias: "<org-alias>"           # default sf CLI org alias
+  app_prefix: "XYZ"              # defaults to project.shortname; used in perm-set naming
+  api_version: "66.0"            # 66.0+ required for Agentforce
+  org_alias: "<repo-basename>"   # /init sets this to the project directory name
   package_directories:
     - "force-app"
-  agentforce_variant: ""             # "Employee" | "Service" | "" (not used)
-  industries: []                     # any subset of: [datacloud, agentforce, omnistudio, cme]
+  agentforce_variant: ""         # "Employee" | "Service" | "" (not in scope)
+  industries: []                 # subset of: [datacloud, agentforce, omnistudio, cme]
   features:
-    # ui_bundles — Multi-framework UI Bundles (Beta). When true, skills assume
-    # the target org has the "UI Bundles" beta feature enabled in Setup → Release
-    # Updates and may scaffold React apps via `sf template generate ui-bundle`
-    # under `uiBundles/<AppName>/` (alongside or instead of LWC). When false,
-    # the React/UI-bundle path is suppressed and skills stay on the LWC-only
-    # default. Read by generating-lwc-components, building-ui-bundle-app,
-    # generating-ui-bundle-metadata, and the /spec + /architect skills.
-    ui_bundles: false
-  # ---------------------------------------------------------------------------
-  # coverage — Three-tier Apex coverage policy (REQ-A).
-  # ---------------------------------------------------------------------------
-  # mode:
-  #   greenfield — org is bootstrapping; only org-level coverage gates deploys.
-  #                Per-class coverage on changed classes is informational only.
-  #   brownfield — established org; both org-level AND per-changed-class
-  #                coverage gate deploys. (default)
-  # org_floor    — Salesforce platform minimum (75). Never lower this.
-  # org_target   — project policy floor. Org coverage must stay at/above this
-  #                after a deploy or /canary blocks promotion.
-  # class_floor  — minimum coverage on a CHANGED Apex class in brownfield mode.
-  #                Ignored in greenfield mode.
-  # diff_only    — when true, measure coverage on diff lines only (uses
-  #                ApexCodeCoverage tooling-API rows). Defaults false; flip
-  #                on once the project has stable baseline coverage.
-  #
-  # Read by: agents/test-auditor.md, canary/SKILL.md Step 5, partials/
-  # sf-quality-checklist.md. Skills NEVER hardcode 75/80 — always read from
-  # config and fall back to these defaults if the block is missing.
+    ui_bundles: false            # multi-framework UI Bundles (Beta)
   coverage:
-    mode: brownfield
-    org_floor: 75
-    org_target: 80
-    class_floor: 75
+    mode: brownfield             # greenfield | brownfield
+    org_floor: 75                # platform minimum — never lower
+    org_target: 80               # project policy floor
+    class_floor: 75              # min coverage on changed Apex (brownfield only)
     diff_only: false
-  # ---------------------------------------------------------------------------
-  # smoke_tests — REQ-D. Apex test class names run against staging when no
-  # Apex is in the diff but you still want a smoke gate. When unset, /canary
-  # falls back to RunLocalTests for staging (production-equivalent default).
-  # Sandbox runs NoTestRun for metadata-only diffs regardless.
-  # Example: ["AccountServiceSmokeTest", "OpportunityCriticalPathTest"]
-  # ---------------------------------------------------------------------------
-  smoke_tests: []
-
-# ---------------------------------------------------------------------------
-# stack: Tech stack declaration. Drives conditional skill behavior.
-# ---------------------------------------------------------------------------
-# Recognized values:
-#   languages:  apex | javascript | typescript
-#   frontends:  lwc | aura
-#   backends:   salesforce-platform | external-rest
-#   databases:  salesforce-soql | datacloud
-#   ci:         github-actions | gitlab-ci | circleci | jenkins | none
+  smoke_tests: []                # Apex test class names for diff-aware fallback in /canary
 
 stack:
   languages: [apex, javascript]
@@ -142,71 +30,15 @@ stack:
   databases: [salesforce-soql]
   ci: github-actions
 
-# ---------------------------------------------------------------------------
-# repos: This repo plus every sibling it might coordinate with.
-# ---------------------------------------------------------------------------
-# The key is a short stable id (used in task frontmatter as `repo: <id>`).
-# The entry for THIS repo has `primary: true` and no `path` (path is implicit).
-# Sibling entries declare a `path:` relative to this repo's root (or absolute).
-
 repos:
-  # The common SF case: a single DX project repo.
   sfdc:
     primary: true
-  # Example sibling (an external integration repo, e.g. MuleSoft, Heroku app)
-  # integration:
-  #   path: ../integration
-
-# ---------------------------------------------------------------------------
-# merge_order: Order Phase 8 merges PRs across touched repos.
-# ---------------------------------------------------------------------------
-# List touched repo ids in the order they should merge. For a single-repo SF
-# project this is just [sfdc]. If you have a sibling integration repo, merge
-# the contract-providing repo first.
 
 merge_order:
   - sfdc
 
-# ---------------------------------------------------------------------------
-# orgs: sf CLI deploy targets for /canary and /wrapup.
-# ---------------------------------------------------------------------------
-# Maps an environment label to an sf CLI org alias. /canary promotes a change
-# along this list (sandbox -> staging -> prod), running `sf project deploy
-# validate` then `sf project deploy start`. The "prod" entry is gated by an
-# ask-prompt in .claude/settings.json; never auto-approved.
-#
-# `agentforce_test_specs` is the path to your sf agent test specs (used by
-# /canary's Agentforce smoke gate). Omit when Agentforce is not in scope.
-
 orgs:
-  sandbox: "<sandbox-alias>"
-  staging: "<staging-alias>"
-  prod:    "<prod-alias>"
+  sandbox: "<repo-basename>"     # /init sets this to the project directory name; /canary deploys here only
 
-agentforce_test_specs: ""           # e.g., "force-app/main/default/agentTests"
-
-# ---------------------------------------------------------------------------
-# playwright_specs: Directory holding Playwright UI specs (E2E browser tests).
-# ---------------------------------------------------------------------------
-# Required for any project that ships LWCs, FlexiPages, Lightning Apps,
-# Experience Cloud sites, OmniScripts, Flow screens, custom tabs, or
-# Agentforce conversation UI. /architect Step 8 ("UI test obligation") reads
-# this key — when it's declared, every UI-bearing task gets a paired
-# `tests/e2e/<feature>.spec.ts` in *Files to Create/Modify* and an acceptance
-# criterion to run it; when it's missing, the architect downgrades to a
-# Technical-Notes warning and the implementer skips Playwright entirely.
-# /canary Step 4b runs `npx playwright test` as a real-browser smoke gate
-# against sandbox/staging when this is set; agents/test-auditor.md uses it
-# to detect E2E coverage gaps.
-#
-# Default `tests/e2e` matches the path baked into architect/SKILL.md and
-# test-auditor.md. Override only if your repo standardizes on a different
-# location. Set to "" or remove the key to opt out (LWC Jest stays required;
-# Playwright becomes informational).
-#
-# Pairs with a `playwright.config.ts` at repo root and a
-# `tests/e2e/global-setup.ts` that persists `storageState.json` from
-# `sf org display`. Without those, test-auditor flags the missing wiring
-# as Major.
-
-playwright_specs: "tests/e2e"
+agentforce_test_specs: ""        # path to sf agent test specs (Agentforce only)
+playwright_specs: "tests/e2e"    # /architect requires UI specs when set; "" to opt out

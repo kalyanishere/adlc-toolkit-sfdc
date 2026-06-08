@@ -392,11 +392,51 @@ else
 fi
 ```
 
-Then **resolve `project.shortname`**:
+Then **resolve `project.shortname`** AND auto-fill the dependent placeholders so the config is usable end-to-end without any manual editing:
 
 1. Ask the user: "Pick a 3-uppercase-letter shortname for this project (used in IDs like `XYZ-REQ-001`). Examples: `SFC` for Salesforce-Customer-360, `ORD` for Order-Management, `PRT` for Partner-Portal. Pick something unique across every repo on your machine — once specs exist, changing it requires a migration."
 2. Validate against `^[A-Z]{3}$`. Reject anything else and re-prompt.
 3. Write it under `project.shortname` in `.adlc/config.yml`. If a value already exists and matches the regex, preserve it; if it's the placeholder `XYZ`, prompt the user to set a real value.
+4. **Auto-fill the dependent fields** — these always derive from shortname + repo path, so there's no point asking for them separately:
+   - `salesforce.app_prefix` → set to the resolved shortname (perm-set naming pattern is `<AppPrefix>_<Component>_<AccessLevel>`).
+   - `salesforce.org_alias` → set to `basename(REPO_ROOT)` (the project directory name; the user typically authenticates the sandbox under the project name and `sf org login web --alias <project-dir>` is the natural default).
+   - `orgs.sandbox` → set to the same `basename(REPO_ROOT)` (canary deploys to sandbox and only sandbox; `staging` and `prod` were removed from the template because the script never deploys to them).
+
+   The user can override any of these by hand-editing `.adlc/config.yml` after `/init` completes — the auto-fill is a "good default" only. Re-running `/init` does not overwrite an already-customized value (the substitute runs only when the field still equals the template placeholder).
+
+```bash
+# Auto-fill dependent placeholders. Each substitution is gated on the field
+# still being the template placeholder, so re-running /init never clobbers
+# a user-customized value.
+PROJECT_DIR=$(basename "$(pwd)")
+SHORTNAME="$shortname"   # set by the prior validation block
+
+# salesforce.app_prefix — default to project.shortname.
+if grep -qE '^[[:space:]]*app_prefix:[[:space:]]*"XYZ"[[:space:]]*$' .adlc/config.yml; then
+  sed -i.bak -E "s|^([[:space:]]*app_prefix:[[:space:]]*)\"XYZ\"|\1\"$SHORTNAME\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+  echo "Set salesforce.app_prefix='$SHORTNAME'"
+fi
+
+# salesforce.org_alias — default to basename of repo root.
+if grep -qE '^[[:space:]]*org_alias:[[:space:]]*"<repo-basename>"[[:space:]]*$' .adlc/config.yml; then
+  sed -i.bak -E "s|^([[:space:]]*org_alias:[[:space:]]*)\"<repo-basename>\"|\1\"$PROJECT_DIR\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+  echo "Set salesforce.org_alias='$PROJECT_DIR'"
+fi
+
+# orgs.sandbox — same convention.
+if grep -qE '^[[:space:]]*sandbox:[[:space:]]*"<repo-basename>"[[:space:]]*$' .adlc/config.yml; then
+  sed -i.bak -E "s|^([[:space:]]*sandbox:[[:space:]]*)\"<repo-basename>\"|\1\"$PROJECT_DIR\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+  echo "Set orgs.sandbox='$PROJECT_DIR'"
+fi
+```
+
+After this block, the config is fully populated:
+- `project.shortname` = user input (e.g., `SAP`)
+- `salesforce.app_prefix` = same as shortname (`SAP`)
+- `salesforce.org_alias` = `basename($PWD)` (e.g., `sampleagenticapp6`)
+- `orgs.sandbox` = same as `org_alias`
+
+The user can authenticate the sandbox with `sf org login web --alias <project-dir>` and every skill will pick it up automatically.
 
 ```bash
 # Verify the shortname field is set and valid

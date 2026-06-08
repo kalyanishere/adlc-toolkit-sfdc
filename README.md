@@ -138,10 +138,10 @@ Required values to fill in:
 ## Workflow
 
 ```
-/spec → /validate → /architect → /validate → implement → /reflect → /review → merge → /wrapup → /canary sandbox → /canary staging → /canary prod (validate-only) → manual sf deploy
+/spec → /validate → /architect → /validate → implement → /reflect → /review → merge → /wrapup → /canary  ──▶  CI/CD pipeline promotes sandbox → staging → prod
 ```
 
-`/canary` deploys to sandbox and staging itself, but **for prod it stops at validate**. It surfaces the validation id from `sf project deploy validate` and prints the exact `sf project deploy quick --target-org <prod-alias> --job-id <validation-id>` command for you to run yourself. The skill never executes a deploy command against the prod alias under any circumstances — Agentforce and Playwright smoke gates against prod are skipped for the same reason (no fresh deploy yet) and should be re-run after the manual deploy lands. Validations remain reusable for ~10 days.
+`/canary` deploys to **sandbox only** (`orgs.sandbox` from `.adlc/config.yml`). Staging and production deploys are owned by the project's CI/CD pipeline (GitHub Actions, Gearset, Copado, etc.) — not by the ADLC pipeline. The ADLC handoff is "merged + sandbox-deployed + smoke-passed"; the team promotes from sandbox forward via their existing release process.
 
 ### Complexity-aware `/proceed` (REQ-C)
 
@@ -149,7 +149,7 @@ The requirement template carries a `complexity:` frontmatter field — `trivial 
 
 ### Diff-aware test level in `/canary` (REQ-D)
 
-`/canary` Step 2b auto-picks `--test-level` from the diff. Metadata-only sandbox deploys run `NoTestRun`; sandbox+Apex runs `RunSpecifiedTests` against the test classes derived from the changed-class file names; staging falls back to `RunLocalTests` (or to a configured smoke list via `salesforce.smoke_tests`); prod always runs `RunLocalTests`. Saves typically 60-90% of validate wall time on metadata-only changes.
+`/canary` Step 2 auto-picks `--test-level` from the diff. Metadata-only sandbox deploys run `NoTestRun`; sandbox+Apex runs `RunSpecifiedTests` against test classes derived from the changed-class file names. Saves typically 60-90% of validate wall time on metadata-only changes. (Staging and production deploys are CI-owned; their test-level policy lives in the project's pipeline config, not here.)
 
 ### React UI Bundles (Beta) — multi-framework
 

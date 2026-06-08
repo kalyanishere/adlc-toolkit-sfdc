@@ -148,7 +148,7 @@ For repeatability across runs, classify by mechanical pattern match — not intu
 
 ### Quality issues — credentials & target org
 - **Hardcoded credentials in specs** (Critical) — auth must come from `sf org display --json` → `storageState.json`, never inline. Any literal `password:`, `token:`, or `accessToken:` string under `tests/e2e/**` is an automatic Critical.
-- **Specs targeting `orgs.prod` for mutations** (Critical) — E2E specs MUST default to `orgs.sandbox` and may opt into `orgs.staging` only with an explicit `--project` flag. The `prod` project MUST have `grep: /@prod-safe/`. If `playwright.config.ts` defines `name: 'prod'` without that grep filter, that's a Critical regardless of whether any spec is currently mutating.
+- **Specs targeting non-sandbox orgs for mutations** (Critical) — E2E specs MUST target `orgs.sandbox` only. The ADLC pipeline does not own staging or production deploys; specs that hard-code a staging or prod org alias are a Critical regardless of whether they currently mutate. Read auth from `sf org display --json` → `storageState.json` against the sandbox alias resolved from `.adlc/config.yml`.
 
 ### Quality issues — synchronization
 - **Hard sleeps** (Major) — `setTimeout`, `page.waitForTimeout`, `setInterval` for synchronization. Use Playwright's web-first auto-waiting (`toBeVisible`, `toHaveURL`, `toHaveText`).

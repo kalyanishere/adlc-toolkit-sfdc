@@ -168,7 +168,7 @@ If this REQ touched Agentforce metadata (any `.agent` file, `.genAiFunction-meta
    ```sh
    find force-app -path '*/genAi*-meta.xml' -o -name '*.agent' | xargs grep -hE '<apiVersion>([0-9.]+)' | awk -F'[<>]' '{ if ($3 < 66.0) print $0 }'
    ```
-2. **Deploy order**: walk the deploy log for the most recent staging/prod deploy (from Step 6, OR `sf project deploy report --target-org <staging-alias>`) and confirm the dependency-order:
+2. **Deploy order**: walk the deploy log for the most recent sandbox deploy (from Step 6, OR `sf project deploy report --target-org <sandbox-alias>`) and confirm the dependency-order:
    - Custom fields and metadata files appear in the deploy result before Apex
    - Apex appears before Flow
    - Flow appears before GenAi* (`GenAiFunction`, `GenAiPlugin`, `GenAiPromptTemplate`)
@@ -176,7 +176,7 @@ If this REQ touched Agentforce metadata (any `.agent` file, `.genAiFunction-meta
 3. **Variant-correct user**: read `.adlc/config.yml` `salesforce.agentforce_variant`. If `Service`, confirm a dedicated Einstein Agent User + system permission set was deployed; if `Employee`, confirm `default_agent_user` is omitted from the agent definition. Surface a finding if mismatched.
 4. **`@InvocableVariable` wrappers**: every `@InvocableMethod` referenced by an Agent Script `apex://` target uses an `@InvocableVariable` wrapper class with named fields — never a bare `List<T>`. Grep `force-app/main/default/classes/*.cls` for `@InvocableMethod` and confirm.
 
-If any check fails, surface as a wrapup blocker. The corrective action is a forward-fix deploy (Salesforce has no rollback) — recommend the user open a **`/bugfix`** if the defect is in already-shipped behavior (a regression, compile error, runtime exception, FLS oversight, or any "what shipped doesn't work as documented"), OR re-run `/canary` against staging after fixing.
+If any check fails, surface as a wrapup blocker. The corrective action is a forward-fix deploy (Salesforce has no rollback) — recommend the user open a **`/bugfix`** if the defect is in already-shipped behavior (a regression, compile error, runtime exception, FLS oversight, or any "what shipped doesn't work as documented"), OR re-run `/canary` against the sandbox after fixing.
 
 ### Bug vs follow-up REQ — decision rule
 
@@ -373,17 +373,20 @@ Create a concise summary suitable for sharing with the team. In cross-repo mode,
 ### Follow-up needed
 ```
 
-### Step 6: Deploy
+### Step 6: Deploy to sandbox
 
-Walk the touched Salesforce repos and promote the change set through `/canary`. Read `.adlc/config.yml` `orgs:` for environment aliases — every step below is conditional on what the project actually declares.
+Walk the touched Salesforce repos and promote the change set to **sandbox only**. Staging and production deploys are owned by the project's CI/CD pipeline (GitHub Actions, Gearset, Copado, etc.) — not by the ADLC pipeline. The wrapup hands off a merged + sandbox-deployed change set; the team promotes it forward.
 
 1. **Skip if no deployable Salesforce changes** (e.g., only ADLC docs / spec edits). The wrapup may complete with the merge alone.
-2. **Promote to staging** via `/canary staging` (delegates to `sf project deploy validate` then `sf project deploy start` against the staging org alias). The `sf project deploy start:*` permission is on the `ask` list — Claude Code surfaces an ask-prompt; the user confirms once.
-3. **Smoke gate**: when `salesforce.industries:` includes `agentforce`, `/canary` automatically runs `sf agent test run` against the test specs at `agentforce_test_specs:`. On any failure, STOP — recommend a forward-fix; do NOT auto-promote to prod.
-4. **Confirm**: read `sf project deploy report --target-org <staging-alias> --json` and confirm the deploy id matches the run from `/canary staging`. Surface succeeded/failed component counts.
-5. **Promote to production**: NEVER auto. Emit a one-line summary: "Staging deploy ✓ — run `/canary prod` to deploy to production." Do not auto-continue. The user runs `/canary prod` as a deliberate, separate invocation, and `.claude/settings.json` ask-gates `sf project deploy start --target-org prod*` and `sf agent activate` so even the explicit invocation surfaces a final confirmation.
+2. **Deploy to sandbox** via `/canary` (no arguments — the skill always targets `orgs.sandbox` from `.adlc/config.yml`). It runs three local pre-flight passes, then `sf project deploy validate`, then `sf project deploy start`. The `sf project deploy start:*` permission is on the `ask` list — Claude Code surfaces an ask-prompt; the user confirms once.
+3. **Smoke gates** run automatically inside `/canary`:
+   - When `salesforce.industries:` includes `agentforce`, `sf agent test run` against `agentforce_test_specs:`.
+   - When `playwright_specs:` is set, `npx playwright test --project=sandbox` against the just-deployed sandbox.
+   On any failure, STOP — recommend a forward-fix; do NOT mark the wrapup complete.
+4. **Confirm**: `/canary` emits a per-step report. Pin the deploy id and the per-step pass/fail counts into the ship summary.
+5. **Hand off promotion**: emit a one-line summary in the ship report — "Sandbox deploy ✓ — promote to staging/prod via your CI/CD pipeline (`<pipeline-name>` in `.github/workflows/` or equivalent)." The ADLC pipeline does not deploy past sandbox under any circumstances.
 6. **Vlocity / OmniStudio DataPacks**: when `industries:` includes `omnistudio`, after the standard sf deploy, confirm any DataPack pack deploys via `vlocity packDeploy` (the `Bash(vlocity packDeploy:*)` permission is also on `ask`). Run `vlocity packGetDiffs` first to confirm the pack manifest matches the deploy plan.
-7. In cross-repo mode, emit a one-line deploy status per touched repo in the ship summary. External (non-SFDC) sibling repos use their own deploy mechanism — surface a TODO if their deploy is outside this skill's scope.
+7. In cross-repo mode, emit a one-line sandbox-deploy status per touched repo in the ship summary. External (non-SFDC) sibling repos use their own deploy mechanism — surface a TODO if their deploy is outside this skill's scope.
 
 ### Step 7: Clean Up
 1. Check for any temporary files, debug logging, or feature flags that should be removed
