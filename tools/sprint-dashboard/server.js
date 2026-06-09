@@ -47,8 +47,16 @@ const LIVE_WAIT_CAP_MS = (() => {
 
 const HTML_PATH = path.join(__dirname, 'index.html');
 
+// Phase labels match /proceed/SKILL.md headings exactly. Phase 0 is the
+// Preflight + pre-validation state init step that runs in the MAIN CHECKOUT
+// before any worktree exists. Worktrees are created at Step 1.5 — between
+// Phase 1 (Spec validate) and Phase 2 (Architect) — once Phase 1 has passed.
+// An older revision of this label list called Phase 0 "Worktree", which
+// contradicted /proceed and made users think worktree was the first thing
+// to happen. Keep these in sync with proceed/SKILL.md if the phase
+// definitions ever change.
 const PHASE_LABELS = [
-  '0 Worktree',
+  '0 Preflight',
   '1 Spec',
   '2 Architect',
   '3 Validate',
