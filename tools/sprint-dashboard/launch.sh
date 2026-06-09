@@ -117,13 +117,43 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "[sprint-dashboard] node not on PATH — skipping dashboard launch" >&2
-  exit 0
+  cat >&2 <<EOF
+[sprint-dashboard] FAILED: node not found on PATH.
+  Install Node.js (v18+) to run the dashboard server. The skill registry
+  was still updated, so the project will appear once a dashboard is
+  running on this host.
+EOF
+  exit 0   # never fail the parent skill
 fi
 
 if [ ! -f "$SERVER_JS" ]; then
-  echo "[sprint-dashboard] server.js not found at $SERVER_JS — skipping" >&2
+  cat >&2 <<EOF
+[sprint-dashboard] FAILED: server.js not found at $SERVER_JS.
+  This usually means ~/.claude/skills is not symlinked to your toolkit
+  clone (run-from-anywhere expects it to be a symlink to adlc-toolkit-sfdc).
+  Verify with:
+    readlink ~/.claude/skills
+  If empty or pointing somewhere unexpected, re-run the symlink step
+  from the toolkit README ('Setup → 2. Symlink to Claude Code').
+EOF
   exit 0
+fi
+
+# Pre-flight port check — emit a clear message if the configured port is
+# already in use by something OTHER than our dashboard. (If our own dashboard
+# is the user, the PID-file check above would have caught it; this catches
+# port collisions with unrelated processes — e.g., another dev tool on 5174.)
+if command -v lsof >/dev/null 2>&1; then
+  PORT_HOG="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+  if [ -n "$PORT_HOG" ]; then
+    PORT_HOG_CMD="$(ps -p "$PORT_HOG" -o command= 2>/dev/null || echo unknown)"
+    cat >&2 <<EOF
+[sprint-dashboard] FAILED: port $PORT already in use by pid $PORT_HOG ($PORT_HOG_CMD).
+  Either stop that process, or pick a different port:
+    ADLC_DASHBOARD_PORT=5175 sh \$0
+EOF
+    exit 0
+  fi
 fi
 
 # Spawn detached. nohup + & so the server outlives the shell that launched it.
@@ -145,6 +175,23 @@ while [ $i -lt 30 ]; do
   i=$((i + 1))
 done
 
-# Fell through — server didn't come up. Don't fail the parent skill.
-echo "[sprint-dashboard] launch attempted (pid $LAUNCHED_PID), URL not yet ready — see $LOG_FILE" >&2
+# Fell through — server didn't come up in 3s. Differentiate "still booting"
+# from "crashed on boot": if the spawned PID is dead, the server crashed and
+# the user needs to see the log tail; if it's alive, the server is just slow
+# and the URL file will appear shortly (rare but possible on cold-boot).
+if ! kill -0 "$LAUNCHED_PID" 2>/dev/null; then
+  cat >&2 <<EOF
+[sprint-dashboard] FAILED: server crashed on boot (pid $LAUNCHED_PID is dead).
+  Last few lines of $LOG_FILE:
+EOF
+  tail -20 "$LOG_FILE" 2>/dev/null | sed 's/^/  | /' >&2 || true
+  cat >&2 <<EOF
+  Common causes:
+    • Port $PORT taken by another process — set ADLC_DASHBOARD_PORT
+    • node version too old — server.js requires Node 18+
+    • server.js syntax error — pull the latest toolkit
+EOF
+else
+  echo "[sprint-dashboard] launch attempted (pid $LAUNCHED_PID), URL not yet ready — server may still be booting; check $LOG_FILE if no URL appears in a few seconds." >&2
+fi
 exit 0

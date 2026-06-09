@@ -135,6 +135,42 @@ Required values to fill in:
 - `salesforce.industries` — trim to what's actually in scope (the file-glob router will skip rubrics for unused surfaces)
 - `salesforce.agentforce_variant` — `Employee` or `Service` when Agentforce is in scope
 
+### 5. Verify the sprint dashboard launched
+
+After `/init`, the sprint dashboard server should be running on `http://127.0.0.1:5174` and your new project should appear in the project dropdown within ~1.5s. If `/init`'s output ends with `[sprint-dashboard] launched: http://...` and you can hit that URL, you're done.
+
+#### Dashboard didn't open?
+
+Quick check before troubleshooting — confirm the server is running and the registry includes your project:
+
+```bash
+cat ~/.adlc/runtime/sprint-dashboard.url   # should print http://127.0.0.1:5174 (or your override)
+ps -p "$(cat ~/.adlc/runtime/sprint-dashboard.pid)" -o pid,command   # should show node ... server.js
+jq '.roots[].path' ~/.adlc/dashboard-registry.json   # should list your project's absolute path
+```
+
+The seven failure modes, in rough order of frequency:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `[sprint-dashboard] FAILED: server.js not found at ...` | `~/.claude/skills` is not symlinked to the toolkit clone | Re-run Setup step 2 (`ln -s "$TOOLKIT" "$HOME/.claude/skills"`). Verify with `readlink ~/.claude/skills`. |
+| `[sprint-dashboard] FAILED: node not found on PATH` | Node.js not installed or not in `$PATH` | Install Node 18+ (`brew install node` on macOS); ensure your shell rc puts node on PATH for non-interactive shells. |
+| `[sprint-dashboard] FAILED: port 5174 already in use by pid ... ` | Another process is on 5174 (e.g. another dev server) | Either stop that process or pick a different port: `ADLC_DASHBOARD_PORT=5175 sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`. Add the override to your shell rc to make it permanent. |
+| `[sprint-dashboard] FAILED: server crashed on boot` followed by a log tail | Server.js died at startup — usually port collision (when `lsof` isn't available so the pre-flight check skipped), Node version too old, or a syntax error in a stale `server.js` | Read the log tail in the error output. If port-related, set `ADLC_DASHBOARD_PORT`. If version-related, upgrade Node. If syntax-related, `cd "$(readlink ~/.claude/skills)" && git pull`. |
+| Launcher prints `launched: http://...` but the URL doesn't load | Browser auto-open succeeded but the project hasn't been picked up yet (server polls registry every ~1.5s); OR firewall/VPN is blocking 127.0.0.1 | Wait 2 seconds and refresh. If still empty, `curl http://127.0.0.1:5174/api/state` and look for your project in the JSON. |
+| Launcher silent — no `[sprint-dashboard]` line at all | `/init` ran in a shell that has different `$PATH` than expected (Claude Code launching a sub-shell that doesn't inherit your interactive profile) | Run the launcher manually after `/init`: `sh ~/.claude/skills/tools/sprint-dashboard/launch.sh` from inside your project directory. |
+| Dashboard up, project missing from dropdown | Project root not in the registry — happens when the launcher is invoked from inside the toolkit repo itself (which it deliberately skips), or when `ADLC_FORCE_REGISTER=1` was set on a non-project run | Run `ADLC_FORCE_REGISTER=1 ADLC_ROOT="$(pwd)" sh ~/.claude/skills/tools/sprint-dashboard/launch.sh` from your project directory. |
+
+To restart the dashboard after pulling toolkit updates:
+
+```bash
+PID=$(cat ~/.adlc/runtime/sprint-dashboard.pid 2>/dev/null) && kill "$PID" 2>/dev/null
+rm -f ~/.adlc/runtime/sprint-dashboard.{pid,url,port}
+sh ~/.claude/skills/tools/sprint-dashboard/launch.sh
+```
+
+The launcher is idempotent — running it again from any project also re-registers that project, so after a server restart your projects re-appear automatically as their `/spec` / `/proceed` / `/sprint` commands fire.
+
 ## Workflow
 
 ```
