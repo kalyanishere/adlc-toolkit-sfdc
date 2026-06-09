@@ -517,6 +517,46 @@
       ? `<span title="${durTitle}">Duration <b>${durStr}</b></span>`
       : '';
 
+    // Per-REQ Total: wall-clock from spec creation to latest activity.
+    //   Live REQ:    now − specCreatedAt (keeps ticking).
+    //   Completed:   lastActivityAt − specCreatedAt (frozen).
+    // Different from Duration: Duration starts at startedAt (when /proceed
+    // first ran), Total starts at specCreatedAt (when /spec first wrote
+    // the requirement.md). The gap between specCreatedAt and startedAt is
+    // the time spec sat in draft before the pipeline kicked off.
+    let totalStr = '';
+    let totalTitle = '';
+    if (req.specCreatedAt) {
+      const sMs = Date.parse(req.specCreatedAt);
+      if (Number.isFinite(sMs)) {
+        let endMs = Date.now();
+        let endSrc = 'now (live)';
+        if (req.completed) {
+          const cands = [];
+          if (req.lastActivityAt) {
+            const m = Date.parse(req.lastActivityAt);
+            if (Number.isFinite(m) && m > sMs) cands.push({ ms: m, src: `last activity (${req.lastActivityAt})` });
+          }
+          if (cands.length) {
+            cands.sort((a, b) => a.ms - b.ms);
+            const last = cands[cands.length - 1];
+            endMs = last.ms;
+            endSrc = last.src;
+          } else {
+            endMs = sMs;
+            endSrc = 'no end telemetry';
+          }
+        }
+        totalStr = fmtSpan(Math.max(0, endMs - sMs));
+        totalTitle = req.completed
+          ? `Total wall-clock from spec creation to last activity. specCreatedAt=${escapeHtml(req.specCreatedAt)} → ${escapeHtml(endSrc)}. Frozen because the REQ has merged.`
+          : `Total wall-clock since spec was created — specCreatedAt=${escapeHtml(req.specCreatedAt)}. Live counter; freezes when the REQ merges.`;
+      }
+    }
+    const totalReq = totalStr
+      ? `<span title="${totalTitle}">Total <b>${totalStr}</b></span>`
+      : '';
+
     // Active: real per-phase execution time when telemetry is available.
     // Modern state files: sum each completed phase's (completedAt-startedAt)
     //   + (now - currentPhaseStartedAt) for the in-flight phase.
@@ -605,7 +645,7 @@
         </div>
         <div class="req-body">
           ${renderPhases(req, labels)}
-          <div class="meta-row">${phaseLine}${dur}${active}${idle}${last}${branch}${taskLine}${userWaitLine}</div>
+          <div class="meta-row">${phaseLine}${totalReq}${dur}${active}${idle}${last}${branch}${taskLine}${userWaitLine}</div>
           ${renderRepos(req)}
           ${renderTasks(req)}
           ${renderBlockers(req)}
@@ -709,32 +749,55 @@
       if (ms > 0) reqsWithExec++;
       execMs += ms;
     }
-    // User-wait math:
-    //   uw.totalSec   = sum of CLOSED wait windows (Stop → next Submit). This
-    //                   represents historical, accounted-for user idle time.
-    //   uw.waitingSec = the CURRENTLY-OPEN wait window (Stop with no Submit
-    //                   yet). It's the live "+Ns waiting" counter on the
-    //                   right of the project bar.
-    //
-    // Total elapsed must NOT add waitingSec — that's a live counter that
-    // gets folded into totalSec the moment the user submits their next
-    // prompt. Adding it now would double-count the same wait window once
-    // it closes, AND inflate Total beyond reality while the user sits at
-    // the prompt (e.g., walk away for 2h → Total appears to balloon by
-    // 2h even though no work is happening).
-    //
-    // The waitingSec live counter is surfaced separately via the
-    // `⏸ +Ns live` pill on the right; the user can see at a glance that
-    // there's an open wait window without it polluting Total.
+    // User-wait math (kept for the User-wait pill, NOT for Total):
+    //   uw.totalSec   = sum of CLOSED wait windows (Stop → next Submit).
+    //   uw.waitingSec = the CURRENTLY-OPEN wait window (live "+Ns" pill).
     const userWaitMs = (uw.totalSec || 0) * 1000;
-    // "Total time" is closed-execution + closed-user-wait — the wall-clock
-    // cost of moving every REQ in this project end-to-end. Excludes any
-    // currently-open user-wait window (shown live in the +Ns live pill).
-    const totalMs = execMs + userWaitMs;
+
+    // Total = wall-clock from EARLIEST signal across all REQs to LATEST
+    // signal across all REQs. Per user request: "last timestamp (across
+    // all reqs) minus the earliest timestamp from the very first spec."
+    //
+    // Earliest signal per REQ: specCreatedAt (server populates from
+    //   requirement.md `created:` if it's a real ISO datetime, else file
+    //   mtime). Falls back to startedAt if specCreatedAt is missing.
+    // Latest signal per REQ: lastActivityAt for completed/in-flight REQs;
+    //   for in-flight REQs add now() so the counter is live.
+    //
+    // This is the true wall-clock cost of moving the project end-to-end:
+    // it includes between-REQ idle gaps, user-wait windows, machine sleep,
+    // overnight pauses — everything. Exec (cumulative per-phase Active)
+    // remains the pure compute metric on its own pill.
+    let earliestMs = Infinity;
+    let latestMs = -Infinity;
+    let anyLive = false;
+    for (const r of project.reqs || []) {
+      const startCandidates = [r.specCreatedAt, r.startedAt]
+        .filter((s) => typeof s === 'string')
+        .map((s) => Date.parse(s))
+        .filter(Number.isFinite);
+      if (startCandidates.length) {
+        const minStart = Math.min(...startCandidates);
+        if (minStart < earliestMs) earliestMs = minStart;
+      }
+      const endCandidates = [r.lastActivityAt, r.startedAt]
+        .filter((s) => typeof s === 'string')
+        .map((s) => Date.parse(s))
+        .filter(Number.isFinite);
+      if (endCandidates.length) {
+        const maxEnd = Math.max(...endCandidates);
+        if (maxEnd > latestMs) latestMs = maxEnd;
+      }
+      if (!r.completed) anyLive = true;
+    }
+    if (anyLive && nowMs > latestMs) latestMs = nowMs;
+    const totalMs = (Number.isFinite(earliestMs) && Number.isFinite(latestMs))
+      ? Math.max(0, latestMs - earliestMs) : 0;
 
     const hasUserWaitData = uw.totalSec > 0 || uw.activeSessions > 0;
     const hasExecData = execMs > 0;
-    if (!hasUserWaitData && !hasExecData) return '';
+    const hasTotalData = totalMs > 0;
+    if (!hasUserWaitData && !hasExecData && !hasTotalData) return '';
 
     const liveBit = uw.waitingSessions > 0
       ? `<span class="pill waiting" title="A Claude Code session is currently waiting for your input. Live counter; advances each second.">⏸ +${fmtSec(uw.waitingSec)} live (${uw.waitingSessions} session${uw.waitingSessions === 1 ? '' : 's'})</span>`
@@ -745,8 +808,10 @@
     const execBit = hasExecData
       ? `<span class="pill running" title="Cumulative pipeline execution time across every REQ — the sum of per-phase active spans. Excludes idle gaps between phases and user wait.">⚡ Exec <b>${fmtSpan(execMs)}</b> across ${reqsWithExec} REQ${reqsWithExec === 1 ? '' : 's'}</span>`
       : '';
-    const totalBit = (hasUserWaitData && hasExecData)
-      ? `<span class="pill stale" title="Total = pipeline execution + closed user-wait windows. The wall-clock cost of moving every REQ in this project end-to-end. Excludes any currently-open wait window (shown live in the right-side pill).&#10;Breakdown: ${fmtSpan(execMs)} exec + ${fmtSec(uw.totalSec)} user wait${uw.waitingSessions > 0 ? ` (currently +${fmtSec(uw.waitingSec)} more in an open window — not yet counted)` : ''}.">⏱ Total <b>${fmtSpan(totalMs)}</b></span>`
+    const earliestStr = Number.isFinite(earliestMs) ? new Date(earliestMs).toISOString() : '(none)';
+    const latestStr = Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : '(none)';
+    const totalBit = hasTotalData
+      ? `<span class="pill stale" title="Total wall-clock from the earliest spec creation to the latest activity (or now() if any REQ is still in flight) across every REQ in this project. Includes between-REQ idle, user-wait, overnight pauses — the real elapsed cost of getting this project to where it is.&#10;Earliest: ${escapeHtml(earliestStr)}&#10;Latest:   ${escapeHtml(latestStr)}${anyLive ? ' (live — using now())' : ''}.">⏱ Total <b>${fmtSpan(totalMs)}</b></span>`
       : '';
 
     const sessionLabel = uw.activeSessions

@@ -164,6 +164,46 @@ function readReqTitle(specDir) {
   }
 }
 
+// Return the earliest known timestamp for a REQ as ISO-8601 string, or null.
+// Used to compute wall-clock Total time. Returns whichever is EARLIEST among:
+//   1. requirement.md `created:` frontmatter — only when it parses as an ISO
+//      datetime with a time component (T...). Date-only `YYYY-MM-DD` is
+//      ignored because midnight-UTC inflates Total by up to ~24h; we
+//      always have a more precise file timestamp anyway.
+//   2. file btime (creation time) when available — the real spec creation
+//      moment on macOS/APFS and ext4 with statx.
+//   3. file mtime — last-modified. /wrapup rewrites the spec frontmatter
+//      (status: complete), so mtime is the END time on completed REQs;
+//      it's a reliable lower bound only because we take the min with btime.
+// Returns null if none are available.
+function readSpecCreatedAt(specDir) {
+  const reqFile = path.join(specDir, 'requirement.md');
+  if (!fs.existsSync(reqFile)) return null;
+  const candidates = [];
+  try {
+    const txt = fs.readFileSync(reqFile, 'utf8');
+    const m = txt.match(/^created:\s*"?([^"\n]+)"?$/m);
+    if (m) {
+      const v = m[1].trim();
+      if (/T\d/.test(v) && !Number.isNaN(Date.parse(v))) {
+        candidates.push(Date.parse(v));
+      }
+      // Date-only intentionally ignored — see comment above.
+    }
+    const stat = fs.statSync(reqFile);
+    if (Number.isFinite(stat.birthtimeMs) && stat.birthtimeMs > 0) {
+      candidates.push(stat.birthtimeMs);
+    }
+    if (Number.isFinite(stat.mtimeMs)) {
+      candidates.push(stat.mtimeMs);
+    }
+  } catch (_) {
+    return null;
+  }
+  if (!candidates.length) return null;
+  return new Date(Math.min(...candidates)).toISOString();
+}
+
 function readTaskStrip(specDir) {
   const tasksDir = path.join(specDir, 'tasks');
   if (!fs.existsSync(tasksDir)) return [];
@@ -236,6 +276,7 @@ function projectReqState(specDir, opts = {}) {
 
   const title = readReqTitle(specDir);
   const tasks = readTaskStrip(specDir);
+  const specCreatedAt = readSpecCreatedAt(specDir);
 
   if (!state) {
     // No live state file. Two sub-cases matter for the dashboard:
@@ -263,7 +304,17 @@ function projectReqState(specDir, opts = {}) {
     // No pipeline-state. If a validation sidecar is present (from /spec,
     // /architect, /validate), surface its completed phases so the phase
     // strip renders green for validated work even before /proceed kicks off.
-    const sideCompleted = sidecar?.completedPhases || [];
+    // Phase 0 (Preflight + state init) only runs inside /proceed and the
+    // sidecar never writes it — but if you've validated anything, you
+    // implicitly have a working spec dir + context files, which is what
+    // Phase 0 verifies. Light Phase 0 green alongside any sidecar phase so
+    // the strip doesn't read "Phase 0 missing but Phase 1 done." When
+    // /proceed actually runs, its real Phase 0 work executes idempotently
+    // and pipeline-state.json overrides this synthetic Phase 0 anyway.
+    const rawSideCompleted = sidecar?.completedPhases || [];
+    const sideCompleted = rawSideCompleted.length
+      ? Array.from(new Set([0, ...rawSideCompleted])).sort((a, b) => a - b)
+      : [];
     const sideHistory = sidecar?.phaseHistory || [];
     const lastSideAt = sideHistory
       .map((p) => (p && typeof p.completedAt === 'string') ? p.completedAt : null)
@@ -296,6 +347,7 @@ function projectReqState(specDir, opts = {}) {
       stallThresholdSec: STALL_THRESHOLD_SEC,
       stale: false,
       validationOnly: sideCompleted.length > 0,
+      specCreatedAt,
     };
   }
 
@@ -482,6 +534,7 @@ function projectReqState(specDir, opts = {}) {
     stalledSeconds,
     stallThresholdSec: STALL_THRESHOLD_SEC,
     stale: false,
+    specCreatedAt,
   };
   // Cache the latest stateful snapshot so a subsequent disappearance of
   // the file (typical worktree-cleanup-before-finalization case) keeps
