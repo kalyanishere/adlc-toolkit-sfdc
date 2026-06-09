@@ -32,6 +32,19 @@ const POLL_MS = 1500;
 // phases (e.g. a multi-minute Apex test phase).
 const STALL_THRESHOLD_SEC = parseInt(process.env.ADLC_DASHBOARD_STALL_SECONDS || '300', 10);
 
+// Cap on the "currently-waiting" live window. The Stop hook fires when Claude
+// finishes a turn; UserPromptSubmit fires when the user submits the next
+// prompt. If the user closes the terminal (SIGKILL, machine sleep, Ctrl-D)
+// without ever submitting again, no Submit event ever closes the bucket and
+// `now - lastStopAt` grows forever, dwarfing real user-wait time on the
+// dashboard. Past this cap we treat the session as no longer waiting (it's
+// realistically gone). 6h default — tune via ADLC_DASHBOARD_LIVE_WAIT_CAP_HOURS.
+// Set to 0 to disable the cap (unbounded live windows).
+const LIVE_WAIT_CAP_MS = (() => {
+  const h = parseFloat(process.env.ADLC_DASHBOARD_LIVE_WAIT_CAP_HOURS || '6');
+  return Number.isFinite(h) && h > 0 ? Math.round(h * 3600 * 1000) : 0;
+})();
+
 const HTML_PATH = path.join(__dirname, 'index.html');
 
 const PHASE_LABELS = [
@@ -605,9 +618,18 @@ function userWaitFor(rootPath, nowMs) {
     totalTurns += s.turnCount;
     let liveMs = 0;
     if (s.lastStopAt) {
-      liveMs = Math.max(0, nowMs - s.lastStopAt);
-      waitingMs += liveMs;
-      waitingSessions++;
+      const rawLive = Math.max(0, nowMs - s.lastStopAt);
+      // Cap the live window: a Stop with no follow-up Submit grows forever
+      // when the user closes the terminal without exiting Claude properly.
+      // Past LIVE_WAIT_CAP_MS we treat the session as gone and stop counting it
+      // toward the live counter. Set ADLC_DASHBOARD_LIVE_WAIT_CAP_HOURS=0 to
+      // disable the cap entirely.
+      const liveBeyondCap = LIVE_WAIT_CAP_MS > 0 && rawLive > LIVE_WAIT_CAP_MS;
+      if (!liveBeyondCap) {
+        liveMs = rawLive;
+        waitingMs += liveMs;
+        waitingSessions++;
+      }
     }
     const reqId = s._reqCache;
     if (reqId) {
