@@ -157,7 +157,69 @@ When `salesforce.features.ui_bundles: true` in `.adlc/config.yml`, the toolkit t
 
 For bugs: `/bugfix` (report → analyze → fix → verify → ship)
 
-For multi-REQ batches: `/sprint` (parallel `/proceed` runners)
+For multi-REQ batches: `/sprint` (parallel `/proceed` runners — see "Sprint engines" below)
+
+## Sprint engines (`legacy` vs `--workflow`)
+
+`/sprint` has two engines behind one command. Both run REQs in parallel, but they drive the per-REQ pipeline very differently. The dispatcher in `sprint/SKILL.md` Step 0 picks one at runtime; default is `legacy`, opt-in is `--workflow`.
+
+### Quick comparison
+
+| | `legacy` (default) | `--workflow` |
+|---|---|---|
+| What runs the pipeline | One background `pipeline-runner` agent per REQ that literally executes `/proceed` Phases 0-8 | A Dynamic Workflows script (`workflows/adlc-sprint.workflow.js`) that dispatches per-phase agents itself |
+| Subskills called | `/proceed` → `/validate`, `/architect`, `/wrapup`, `/canary` | `/wrapup` only — `/validate`, `/architect`, `/canary`, `/review` are inlined as paraphrased prompts |
+| Resume after a halt | Re-run `/proceed REQ-xxx`; replays from last `currentPhase` in `pipeline-state.json` | `Workflow({resumeFromRunId, args:{answers}})` — surgical journal-replay; only the blocked REQ's halt-prone calls re-execute, every other call (and every other REQ) replays from cache with **zero** re-executed side effects |
+| Per-REQ fan-out (Phase 2 explore trio, Phase 5 review panel) | Fans out only in `/proceed`'s main mode; subagent mode (used by `/sprint` background dispatch) serializes inside each runner | Always fans out at the script level (`parallel()`) regardless of where it's running |
+| Cross-REQ shared-repo merge serialization | Best-effort, prose-driven | Pure-JS union-find post-pipeline barrier — disjoint REQs merge in parallel, shared-repo REQs serialize |
+| Schema-validated agent IO | No — agent returns are free text | Yes — every leaf returns a JSON-schema-validated object |
+| Tool availability | Always works | Plan-gated research preview; can be unavailable (see "Detecting Dynamic Workflows availability" below) |
+| Dashboard observability | Phase strip + Active timer + per-phase telemetry update live as `pipeline-state.json` advances | Currently only Phase 0 (worktree init) and Phase 8 (terminal) update the state file — Phases 1-7 don't write `currentPhase`/`completedPhases`/`phaseHistory`/`currentPhaseStartedAt`, so the dashboard renders workflow REQs as stuck-on-Phase-0 until they merge |
+
+### When each engine wins
+
+**Use `legacy`** (or accept the default) when:
+- You want the canonical phase contract — `legacy` calls real `/validate`, `/architect`, `/canary`, `/review` skills, so any improvement to those skills lands automatically.
+- Your project depends on the Salesforce platform-validate gate (Phase 5 Step E) or the Phase 7 Step 7a deferred-validate reconcile — neither runs in `--workflow` today.
+- You want live phase progress on the dashboard (per-phase Active timer, completedPhases, phaseHistory).
+- Your REQs use the `complexity:` tier — `legacy` shrinks the review panel to 1 reviewer for `trivial`, 2 for `small`, 6 for `medium`/`large`. `--workflow` is currently always-6.
+- Dynamic Workflows is unavailable in your session.
+
+**Use `--workflow`** when:
+- You hit a halt mid-sprint and want to resume by typing one answer instead of re-running `/proceed` and waiting for the journal to catch up. The surgical `args.answers[REQ-id]` resume is `--workflow`-only.
+- You're running 5 REQs and want each REQ's internal explore trio + review panel to actually fan out in parallel (`legacy`'s background subagent mode serializes them inside each runner).
+- You want script-enforced cross-REQ shared-repo merge serialization rather than trusting the orchestrator prose.
+- You need schema-validated agent returns (rare — mostly matters when a downstream tool reads the output).
+
+### Known divergences (audit, 2026-06)
+
+Outcome-changing differences where the engines do not produce the same artifact:
+
+1. **Salesforce platform-validate gate is missing in `--workflow`.** `/proceed` Phase 5 Step E runs `sf project deploy validate/start --dry-run` per touched repo (the project's ground-truth gate). The workflow script does not include this step, so SF projects ship without it. Phase 7 Step 7a's deferred-validate reconcile is also absent.
+2. **`--workflow` does not invoke `/validate`, `/architect`, `/canary`, or `/review` as skills** — only paraphrased inline prompts. Improvements to those skills don't propagate to `--workflow` until the script body is also updated.
+3. **No `complexity:` tier handling in `--workflow`** — always full explore trio + always full 6-agent review panel, even on `trivial`/`small` REQs.
+4. **No ghost-REQ reconciler** at start of the workflow run. `/sprint` legacy runs `tools/reconcile-pipeline-state/reconcile.sh` first; `--workflow` does not.
+5. **Phase 0-7 don't update phase telemetry.** Workflow REQs render as Phase 0 with no Active timer until they merge. (We fixed this earlier for spec/architect validation; the per-phase live updates inside a workflow run are the remaining gap.)
+6. **No cross-repo task-routing in Phase 4.** Workflow's `implementPrompt` writes every task to the shared primary worktree; legacy routes each task to `repos[<task.repo>].worktree`.
+7. **Phase 6 `local-bare:<origin>#<branch>` synthetic prUrl marker is not emitted by `--workflow`,** but its Phase 8 expects it for actor-probe — projects with no `gh` access on a hosted remote can fall through.
+8. **Phase 4 is serial in `--workflow`,** even when tasks within a tier touch disjoint files. Legacy main-mode parallelizes within tier.
+9. **Phase 7 fix-and-push is forbidden in `--workflow`** ("Do NOT modify code"). Legacy fixes-in-worktree on cleanup findings and pushes.
+10. **`pipeline-runner.md` agent doc has drifted from `/proceed`** — it doesn't mention Phase 5 Step E (platform-validate) or Phase 7 Step 7a (deferred-validate reconcile). A `pipeline-runner` running in subagent mode silently skips those gates that `/proceed` requires.
+
+The full audit (file:line citations) is in `audit/sprint-engines-divergence.md`. Treat any new divergence as a bug — fix toward whichever engine matches `/proceed`'s spec, since `/proceed` is the canonical phase definition.
+
+### Detecting Dynamic Workflows availability
+
+Dynamic Workflows is a research-preview, plan-gated capability — it can be absent on basic plans, in headless/cron Claude Code runs, or in some IDE integrations. `/sprint --workflow` falls back to `legacy` automatically when unavailable, but you can check ahead of time:
+
+| Signal | What it tells you |
+|---|---|
+| **In a Claude Code session, ask:** `Can you call the Workflow tool? Just answer yes/no.` | Cheapest check. The model knows whether the tool is in its tool list for this session. |
+| **In an existing transcript, grep for the tool name:** `grep -l '"name":"Workflow"' ~/.claude/projects/*/[session-id].jsonl` | If `Workflow` appears in any tool-use record from a prior session in this directory, it's available now too (same plan + same install). |
+| **Run a sentinel `/sprint --workflow REQ-xxx`** — if the dispatcher logs `Workflow tool unavailable; falling back to legacy`, you know. | Burns one user prompt but is definitive. |
+| **`claude --version` + plan name** | The current Claude Code release notes call out Dynamic Workflows availability per plan tier. If the version predates the feature, it's absent regardless of plan. |
+
+If `Workflow` is unavailable, you don't need to do anything — `/sprint --workflow` degrades to `legacy` with an explicit notice. There is no separate "enable Dynamic Workflows" toggle to flip; availability is determined by the platform, not by project config.
 
 ## Project Structure
 
