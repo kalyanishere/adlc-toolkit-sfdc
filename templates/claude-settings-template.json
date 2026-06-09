@@ -1,7 +1,7 @@
 {
-  "_comment": "ADLC Salesforce pipeline allowlist — copied into each project's .claude/settings.json by /init. Pre-approves routine git/gh/sf CLI / sf-lint / lint-skills / Apex test / sf agent test / Vlocity preview operations. Production deploys (sf project deploy start, sf agent activate, sf agent publish), Vlocity packDeploy, and destructive data ops (sf data delete/update/upsert/import) currently live in allow for unattended pipeline runs — move them to ask if you want a human gate. git/gh/npm/sh use broad prefix wildcards (anything destructive there is already on the allow list explicitly); sf and vlocity stay granular so the safe/destructive split is auditable.",
+  "_comment": "ADLC Salesforce pipeline allowlist — copied into each project's .claude/settings.json by /init. defaultMode is bypassPermissions because /sprint and /proceed run unattended pipelines that fire many routine commands; the allow list below is the safety contract. To require human prompts in your projects, set your user-level ~/.claude/settings.json defaultMode to 'acceptEdits' or 'plan' (project settings override user settings, so set it project-side here too if you want it everywhere). Pre-approves routine git/gh/sf CLI / sf-lint / lint-skills / Apex test / sf agent test / Vlocity preview operations. Production deploys (sf project deploy start, sf agent activate, sf agent publish), Vlocity packDeploy, and destructive data ops (sf data delete/update/upsert/import) currently live in allow for unattended pipeline runs — move them to ask if you want a human gate. git/gh/npm/sh use broad prefix wildcards (anything destructive there is already on the allow list explicitly); sf and vlocity stay granular so the safe/destructive split is auditable.",
   "permissions": {
-    "defaultMode": "acceptEdits",
+    "defaultMode": "bypassPermissions",
     "allow": [
       "Bash(git:*)",
       "Bash(gh:*)",
