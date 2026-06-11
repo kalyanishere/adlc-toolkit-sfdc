@@ -18,7 +18,6 @@ You are a sprint orchestrator that launches multiple `/proceed` pipelines in par
 - Existing worktrees: !`git worktree list 2>/dev/null || echo "Not a git repo"`
 - Available specs: !`ls .adlc/specs/ 2>/dev/null || echo "No specs found"`
 - Pipeline states: !`find .adlc/specs -name pipeline-state.json 2>/dev/null`
-- Sprint dashboard: !`sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`
 
 ## Input
 

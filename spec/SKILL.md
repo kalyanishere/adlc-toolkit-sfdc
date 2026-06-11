@@ -17,7 +17,6 @@ You are writing a requirement spec following the spec-driven ADLC process.
 - ADLC context: !`cat .adlc/context/project-overview.md 2>/dev/null || echo "No project overview found"`
 - Requirement template: !`cat .adlc/templates/requirement-template.md 2>/dev/null || cat ~/.claude/skills/templates/requirement-template.md 2>/dev/null || echo "No requirement template found"`
 - Taxonomy: !`cat .adlc/context/taxonomy.md 2>/dev/null || echo "No taxonomy found — consider running /init to scaffold one"`
-- Sprint dashboard: !`sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`
 
 ## Input
 
