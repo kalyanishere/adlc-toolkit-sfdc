@@ -112,7 +112,7 @@ SIDECAR="$SPEC_DIR/validation-state.json"
 PHASE=<1|2|3>                        # per the mapping above
 NAME=<"Spec"|"Architect"|"Validate">
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-SID="${CLAUDE_SESSION_ID:-}"        # captured for token-usage attribution
+SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"   # captured for token-usage attribution
 mkdir -p "$SPEC_DIR"
 node -e '
   const fs = require("fs");
