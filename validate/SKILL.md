@@ -99,7 +99,7 @@ Before proceeding, verify that `.adlc/specs/` exists. If it doesn't, stop and te
 
 ### Step 5: Stamp the Validation Sidecar (dashboard signal)
 
-When validation passes (no Blockers remaining), write/update `.adlc/specs/<REQ-id>-*/validation-state.json` so the sprint dashboard can show the corresponding pipeline phase as green BEFORE `/proceed` runs. Schema is minimal — `completedPhases: number[]` + `phaseHistory: [{phase, name, completedAt}]`. Phase indices match `/proceed`'s canonical pipeline (1 = Spec, 2 = Architect, 3 = Tasks/Validate). Skip this step on `Implementation validated` — that phase is owned by `/proceed`.
+When validation passes (no Blockers remaining), write/update `.adlc/specs/<REQ-id>-*/validation-state.json` so the sprint dashboard can show the corresponding pipeline phase as green BEFORE `/proceed` runs. Schema is minimal — `completedPhases: number[]` + `phaseHistory: [{phase, name, completedAt}]` + `sessionId` (so the dashboard's token-usage aggregator can attribute Claude Code transcript tokens to spec-only/architect-only REQs that don't yet have a `pipeline-state.json`). Phase indices match `/proceed`'s canonical pipeline (1 = Spec, 2 = Architect, 3 = Tasks/Validate). Skip this step on `Implementation validated` — that phase is owned by `/proceed`.
 
 Add the corresponding phase index based on what was validated:
 - Spec validated → add `1` (name `"Spec"`)
@@ -112,6 +112,7 @@ SIDECAR="$SPEC_DIR/validation-state.json"
 PHASE=<1|2|3>                        # per the mapping above
 NAME=<"Spec"|"Architect"|"Validate">
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SID="${CLAUDE_SESSION_ID:-}"        # captured for token-usage attribution
 mkdir -p "$SPEC_DIR"
 node -e '
   const fs = require("fs");
@@ -119,16 +120,29 @@ node -e '
   const phase = Number(process.argv[2]);
   const name = process.argv[3];
   const now = process.argv[4];
+  const sid = process.argv[5] || null;
   let s = { completedPhases: [], phaseHistory: [] };
   try { s = JSON.parse(fs.readFileSync(f, "utf8")); } catch (_) {}
   if (!Array.isArray(s.completedPhases)) s.completedPhases = [];
   if (!Array.isArray(s.phaseHistory)) s.phaseHistory = [];
   if (!s.completedPhases.includes(phase)) s.completedPhases.push(phase);
   s.completedPhases.sort((a,b) => a-b);
+  // Carry startedAt forward — first phase write defines run start.
+  if (!s.startedAt) s.startedAt = now;
+  // Capture sessionId once per validation-sidecar lifetime so the
+  // dashboard token aggregator can attribute transcript usage. Never
+  // overwrite — preserve the original session that started this REQ.
+  if (sid && !s.sessionId) s.sessionId = sid;
   s.phaseHistory = s.phaseHistory.filter(h => h && h.phase !== phase);
-  s.phaseHistory.push({ phase, name, completedAt: now });
+  // Stamp startedAt on each phase entry so token bucketing has a window.
+  // For sequential validate runs we approximate startedAt as the previous
+  // entry'\''s completedAt (or sidecar.startedAt for the first entry).
+  const prev = s.phaseHistory.length
+    ? s.phaseHistory[s.phaseHistory.length - 1].completedAt
+    : s.startedAt;
+  s.phaseHistory.push({ phase, name, startedAt: prev, completedAt: now });
   fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
-' "$SIDECAR" "$PHASE" "$NAME" "$NOW"
+' "$SIDECAR" "$PHASE" "$NAME" "$NOW" "$SID"
 ```
 
 This file is read-only for `/proceed` — once `/proceed` runs and writes its own `pipeline-state.json`, the dashboard merges sidecar phases under live pipeline state (live state always wins on the same phase index).

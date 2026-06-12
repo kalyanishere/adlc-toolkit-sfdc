@@ -9,6 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const tokenUsage = require('./token-usage');
 
 const HOME = os.homedir();
 const HOME_RUNTIME = path.join(HOME, '.adlc', 'runtime');
@@ -263,7 +264,14 @@ function readValidationSidecar(specDir) {
     ? v.completedPhases.filter((n) => Number.isInteger(n) && n >= 0 && n <= 8)
     : [];
   const phaseHistory = Array.isArray(v.phaseHistory) ? v.phaseHistory : [];
-  return { completedPhases, phaseHistory };
+  // sessionId + startedAt power the token-usage aggregator's
+  // sidecar-fallback path: spec-only / architect-only REQs that don't yet
+  // have a pipeline-state.json still get token attribution as long as
+  // /validate captured the originating Claude session id.
+  const sessionId = typeof v.sessionId === 'string' && v.sessionId
+    ? v.sessionId : null;
+  const startedAt = typeof v.startedAt === 'string' ? v.startedAt : null;
+  return { completedPhases, phaseHistory, sessionId, startedAt };
 }
 
 function projectReqState(specDir, opts = {}) {
@@ -348,6 +356,13 @@ function projectReqState(specDir, opts = {}) {
       stale: false,
       validationOnly: sideCompleted.length > 0,
       specCreatedAt,
+      // Surface the sidecar's session + phase history so token-usage
+      // aggregation works for spec-only / architect-only REQs that never
+      // ran /proceed. Phase windows in sideHistory carry startedAt as
+      // well as completedAt (the /validate sidecar writer chains the
+      // previous entry's completedAt into the next entry's startedAt).
+      sessionId: sidecar?.sessionId || null,
+      phaseHistory: sideHistory,
     };
   }
 
@@ -535,6 +550,15 @@ function projectReqState(specDir, opts = {}) {
     stallThresholdSec: STALL_THRESHOLD_SEC,
     stale: false,
     specCreatedAt,
+    // sessionId fallback: pipeline-state owns it once /proceed runs, but
+    // for runs that started before sessionId capture (or where /proceed
+    // hasn't yet stamped state in this poll cycle), pull from the
+    // validation sidecar as a last resort. Never null when either source
+    // has captured it.
+    sessionId: (typeof state.sessionId === 'string' && state.sessionId)
+      ? state.sessionId
+      : (sidecar?.sessionId || null),
+    phaseHistory,
   };
   // Cache the latest stateful snapshot so a subsequent disappearance of
   // the file (typical worktree-cleanup-before-finalization case) keeps
@@ -800,16 +824,47 @@ function snapshot() {
       // Stitch per-REQ user-wait into each REQ entry. REQs with no
       // worktree-attributed sessions get a zero-valued shape so the UI
       // can render uniformly without null-checks.
-      const reqs = p.reqs.map((r) => ({
-        ...r,
-        userWait: userWait.byReq[r.reqId] || {
-          totalSec: 0, waitingSec: 0, waitingSessions: 0, turns: 0,
-        },
-      }));
+      const reqs = p.reqs.map((r) => {
+        // Token rollup: aggregate the runner session's transcript
+        // messages, bucket by phase using phaseHistory windows.
+        // `phaseHistory` is kept on the in-memory record purely for
+        // this aggregation — strip it from the wire payload below to
+        // keep the SSE frame small.
+        const tokens = tokenUsage.aggregateForReq(p.path, {
+          sessionId: r.sessionId,
+          phaseHistory: r.phaseHistory,
+          currentPhase: r.currentPhase,
+          currentPhaseStartedAt: r.currentPhaseStartedAt,
+        }, nowMs);
+        const { phaseHistory: _ph, sessionId: _sid, ...rest } = r;
+        return {
+          ...rest,
+          userWait: userWait.byReq[r.reqId] || {
+            totalSec: 0, waitingSec: 0, waitingSessions: 0, turns: 0,
+          },
+          tokens,
+        };
+      });
+      // Project-level token rollup: sum per-REQ totals + per-phase across REQs.
+      const projectTotal = tokenUsage.sumBuckets(reqs.map((r) => r.tokens.total));
+      const projectByPhase = {};
+      for (const r of reqs) {
+        for (const [phase, bucket] of Object.entries(r.tokens.byPhase)) {
+          if (!projectByPhase[phase]) {
+            projectByPhase[phase] = tokenUsage.emptyBucket();
+          }
+          projectByPhase[phase] = tokenUsage.sumBuckets([projectByPhase[phase], bucket]);
+        }
+      }
       // Strip the byReq map from the project-level rollup so the wire
       // payload doesn't repeat the per-REQ data twice.
       const { byReq: _drop, ...projectRollup } = userWait;
-      return { ...p, reqs, userWait: projectRollup };
+      return {
+        ...p,
+        reqs,
+        userWait: projectRollup,
+        tokens: { total: projectTotal, byPhase: projectByPhase },
+      };
     });
   projects.sort((a, b) => a.name.localeCompare(b.name));
   return {

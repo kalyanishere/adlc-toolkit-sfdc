@@ -47,6 +47,7 @@ Every write to `pipeline-state.json` MUST honor these types exactly. Loose typin
 - `phaseHistory[*].name`: **string**, the human-readable phase title (e.g. `"Create Worktree + Preflight"`, `"Validate Architecture & Tasks"`).
 - `phaseHistory[*].startedAt` / `completedAt`: ISO-8601 UTC strings from `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash (see "Timestamps come from the OS, never from you" above).
 - `completed`: **boolean**, set to `true` ONLY once Phase 8 (Wrapup) finishes.
+- `sessionId`: **string | null**, captured once in Phase 0 from `$CLAUDE_SESSION_ID` and never overwritten thereafter. The sprint dashboard joins on this value to attribute Claude Code transcript token usage (`~/.claude/projects/<flattened-cwd>/*.jsonl`) back to this REQ for per-phase token rollups. On resume, preserve the existing value — overwriting orphans token history from the original session.
 
 If you find yourself wanting to put a descriptive string into `currentPhase` "for clarity," stop — clarity belongs in `phaseHistory[*].name`. The number is what the dashboard renders.
 
