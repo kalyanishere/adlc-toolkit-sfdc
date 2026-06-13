@@ -17,6 +17,11 @@ You are writing a requirement spec following the spec-driven ADLC process.
 - ADLC context: !`cat .adlc/context/project-overview.md 2>/dev/null || echo "No project overview found"`
 - Requirement template: !`cat .adlc/templates/requirement-template.md 2>/dev/null || cat ~/.claude/skills/templates/requirement-template.md 2>/dev/null || echo "No requirement template found"`
 - Taxonomy: !`cat .adlc/context/taxonomy.md 2>/dev/null || echo "No taxonomy found — consider running /init to scaffold one"`
+- SF Clouds in scope: !`awk '/^salesforce:/{f=1} f && /^[[:space:]]*clouds:/{print; exit}' .adlc/config.yml 2>/dev/null || echo "salesforce.clouds: not configured"`
+- Industry domains in scope: !`awk '/^industry_domains:/{print; exit}' .adlc/config.yml 2>/dev/null || echo "industry_domains: not configured"`
+- India context flag: !`awk '/^salesforce:/{f=1} f && /^[[:space:]]*india_context:/{print; exit}' .adlc/config.yml 2>/dev/null || echo "salesforce.india_context: not configured"`
+- SF Clouds vocabulary (for tagging): !`head -40 .adlc/context/sf-clouds.md 2>/dev/null || echo "No sf-clouds.md — run /init"`
+- Industry domains vocabulary (for tagging): !`head -40 .adlc/context/industry-domains.md 2>/dev/null || echo "No industry-domains.md — run /init"`
 
 ## Input
 

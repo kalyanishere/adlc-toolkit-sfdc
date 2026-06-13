@@ -14,6 +14,8 @@ salesforce:
     - "force-app"
   agentforce_variant: ""
   industries: []
+  clouds: [platform, sales-cloud, service-cloud]   # baseline; trim/extend per project
+  india_context: false
   features:
     ui_bundles: false
   coverage:
@@ -40,5 +42,15 @@ merge_order:
 
 orgs:
   sandbox: "<repo-basename>"
+
+# Industry domains served. Trim/extend per project — see .adlc/context/industry-domains.md.
+industry_domains: []
+
+audit:
+  enabled: true
+  fail_on: "CRITICAL,HIGH"
+  scope: diff
+  skip_paths: []
+  report_dir: ".adlc/runtime/audit"
 
 playwright_specs: "tests/e2e"

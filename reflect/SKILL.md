@@ -36,6 +36,28 @@ Before proceeding, verify that `.adlc/context/conventions.md` exists. If it does
 4. Get the full diff: `git diff main...HEAD`
 5. **Context files**: if `.adlc/context/conventions.md` and `.adlc/context/architecture.md` are NOT already in your conversation context, Read them now. Otherwise skip — they're already loaded.
 
+### Step 1.5: Run the source-only code audit gate
+
+Before dispatching the reflector agent, run the deterministic Salesforce code audit (`tools/sf-code-audit/audit_source.py` via `partials/run-source-audit.sh`). This is fast, source-only (no org needed), and gates on `audit.fail_on` from `.adlc/config.yml` (default: any `CRITICAL` or `HIGH` finding fails the gate).
+
+```bash
+if [ -x .adlc/partials/run-source-audit.sh ]; then
+  .adlc/partials/run-source-audit.sh
+elif [ -n "${TOOLKIT_HOME:-}" ] && [ -x "$TOOLKIT_HOME/partials/run-source-audit.sh" ]; then
+  sh "$TOOLKIT_HOME/partials/run-source-audit.sh"
+else
+  echo "[reflect] audit wrapper not found at .adlc/partials/run-source-audit.sh — re-run /init to install."
+  exit 1
+fi
+```
+
+Capture the exit code:
+- **0** — gate passed. Continue to Step 2.
+- **1** — gate failed. **Do not** dispatch the reflector agent. Read `.adlc/runtime/audit/source-audit.md`, surface the CRITICAL/HIGH findings to the user verbatim with file/line citations, and treat them as Critical-tier issues in Step 5 (Fix or Defer). After the user fixes them, re-run `/reflect` from Step 1.5.
+- **2** — tool/config error. Surface the error to the user; do not silently skip the gate.
+
+This ordering matters: the deterministic static-analysis gate runs before the LLM-based reflector so the cheap, definitive findings are reported first and the reflector then focuses on convention/design/test gaps that static analysis can't see. The gate is configured in `.adlc/config.yml` under `audit:` — set `fail_on: NONE` to make it advise-only, or `enabled: false` to disable entirely (not recommended).
+
 ### Step 2: Dispatch the `reflector` agent
 Launch the **reflector** agent via the Agent tool. The agent owns the canonical self-review checklist (Correctness, Convention Compliance, Architecture, Testing, Completeness) and handles reading changed files and cross-referencing lessons learned. Keeping the checklist in the agent ensures a single source of truth that `/proceed` Phase 5 also uses.
 

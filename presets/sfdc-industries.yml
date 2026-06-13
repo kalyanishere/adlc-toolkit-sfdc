@@ -19,6 +19,16 @@ salesforce:
     - agentforce
     - omnistudio
     - cme
+  # Industries-tier baseline. Trim per project — see .adlc/context/sf-clouds.md.
+  clouds:
+    - platform
+    - sales-cloud
+    - service-cloud
+    - experience-cloud
+    - data-cloud
+    - agentforce
+    - omnistudio
+  india_context: true
   features:
     ui_bundles: false
   coverage:
@@ -45,6 +55,19 @@ merge_order:
 
 orgs:
   sandbox: "<repo-basename>"
+
+# Industry domains served. Trim per project — see .adlc/context/industry-domains.md.
+# Examples for an India BFSI build: [banking-retail, wealth-management, payments, kyc-aml]
+# For a CG/FMCG build: [cpg-fmcg, partner-distributor, field-execution]
+# For Health: [provider-hospital, payer]
+industry_domains: []
+
+audit:
+  enabled: true
+  fail_on: "CRITICAL,HIGH"
+  scope: diff
+  skip_paths: []
+  report_dir: ".adlc/runtime/audit"
 
 agentforce_test_specs: "force-app/main/default/agentTests"
 playwright_specs: "tests/e2e"

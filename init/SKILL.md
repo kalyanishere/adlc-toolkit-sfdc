@@ -432,6 +432,11 @@ tests/e2e/storageState.json
 reports/playwright/
 playwright-report/
 test-results/
+
+# sf-code-audit project-local venv (auto-created by /init Step 7.8) and runtime reports
+.adlc/tools/sf-code-audit/.venv/
+.adlc/tools/sf-code-audit/__pycache__/
+.adlc/runtime/audit/
 ```
 
 ### Step 6: Copy ETHOS.md, Templates, Partials, and Workflows Into the Project
@@ -503,6 +508,182 @@ fi
 ```
 
 Advise the user: "Open `.adlc/context/taxonomy.md` and customize the example values for this codebase. Authors of new REQs, bugs, and lessons will reference this file when choosing tag values (`component`, `domain`, `stack`, `concerns`)."
+
+### Step 7.4: (SFDC only) Scaffold Salesforce Clouds + Industry Domains taxonomy
+
+**Skip this step entirely if `$STACK != sfdc`.**
+
+The toolkit ships two canonical taxonomy files used by reviewer agents and by `/spec` retrieval:
+
+- `.adlc/context/sf-clouds.md` — vocabulary of Salesforce Clouds (Sales, Service, Platform, Experience, FSC, Health, Life Sciences, Comms, Media, E&U, Mfg, CG, Auto, PSS, Education, Nonprofit, Net Zero, Loyalty + cross-cloud layers OmniStudio / Data Cloud / Agentforce / MuleSoft / Slack / Heroku / Field Service / Payments). Each entry carries an India-specific contextual note (DPDP, GST, ABDM, ONDC, RBI, IRDAI, SEBI, TRAI, etc.).
+- `.adlc/context/industry-domains.md` — vocabulary of business industry domains (BFSI, Healthcare, CME, Manufacturing, Auto, Consumer & Retail, Public Sector, Education, Nonprofit) plus cross-cutting concerns (kyc-aml, payments, compliance-data-privacy, tax-gst-india, field-execution, contact-center, digital-onboarding, revenue-billing, sustainability-esg, partner-distributor). India-specific anchors throughout.
+
+This step (a) copies both files into the consumer repo, (b) prompts the user to pick the clouds and domains in scope, and (c) writes those selections into `.adlc/config.yml`.
+
+```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ "$STACK" = "sfdc" ]; then
+  TOOLKIT_CTX="$TOOLKIT_HOME/.adlc/context"
+
+  if [ ! -f "$TOOLKIT_CTX/sf-clouds.md" ] || [ ! -f "$TOOLKIT_CTX/industry-domains.md" ]; then
+    echo "ERROR: Cloud/domain taxonomy files not found at $TOOLKIT_CTX. Toolkit appears corrupted."
+    exit 1
+  fi
+
+  mkdir -p .adlc/context
+
+  # Overwrite — canonical, machine-consumed dispatch tables.
+  cp "$TOOLKIT_CTX/sf-clouds.md" .adlc/context/sf-clouds.md
+  cp "$TOOLKIT_CTX/industry-domains.md" .adlc/context/industry-domains.md
+  echo "Synced .adlc/context/sf-clouds.md and .adlc/context/industry-domains.md from toolkit canonical."
+fi
+```
+
+Then **prompt the user** (skip this prompting if `$STACK != sfdc` or if `.adlc/config.yml` already has non-empty `salesforce.clouds:` AND non-empty `industry_domains:` — preserve user-customized values).
+
+**Cloud selection (multi-select via AskUserQuestion).** Ask:
+
+> "Which Salesforce Clouds will this project deploy metadata into or integrate with at runtime? Pick all that apply. The full vocabulary is in `.adlc/context/sf-clouds.md`."
+
+Present the most common selections as quick options (Platform is always included automatically; do not present it):
+- **Sales Cloud** — Lead/Opportunity/Account CRM, Forecasting, CPQ
+- **Service Cloud** — Case/Entitlement/Knowledge/Omni-Channel/Field Service
+- **Experience Cloud** — partner portals, customer self-service, dealer/distributor sites
+- **Data Cloud** — DLO/DMO/Calculated Insights/Identity Resolution/Activations
+- **Agentforce** — Topic/Action/Plan, Atlas Reasoning, Prompt Builder
+- **OmniStudio** — OmniScript/FlexCard/DataRaptor/Integration Procedure
+- **Marketing Cloud Engagement** — Journey Builder, Email/Mobile/AMPscript
+- **Account Engagement (Pardot)** — B2B marketing automation
+- **Commerce Cloud B2C** — SFRA/SCAPI/Composable Storefront
+- **Commerce Cloud B2B** — native B2B storefront
+- **Revenue Cloud** — CPQ + Billing + Subscription
+- **Financial Services Cloud** — banking/wealth/insurance data model
+- **Health Cloud** — patient/care plan/provider network
+- **Life Sciences Cloud** — clinical trial / patient services / MSL
+- **Communications Cloud (CME)** — telco EPC / order mgmt
+- **Media Cloud** — broadcast/digital media patterns
+- **Energy & Utilities Cloud** — discom/genco/transco data model
+- **Manufacturing Cloud** — Sales Agreement / Run-Rate Forecast / Rebate
+- **Consumer Goods Cloud** — Retail Execution / Visit Planner / TPM
+- **Automotive Cloud** — OEM-Dealer-Customer 360 / VIN / Service
+- **Public Sector Solutions** — LPI / Benefits / Grants / Constituent 360
+- **Education Cloud** — Student 360 / Admissions / Advising
+- **Nonprofit Cloud** — Donor / Gift / Program Mgmt
+- **Net Zero Cloud** — Scope 1/2/3 emissions accounting
+- **Field Service** — Service Appointment / Resource / Dispatch
+- **Slack** — Slack Connect / Workflow Builder
+- **MuleSoft (integration contract)** — RAML/OAS contracts on Anypoint
+- **Other** — user types in a key from `.adlc/context/sf-clouds.md`
+
+The user picks one or more. Always also include `platform` automatically. Map each user-picked label to its key in `.adlc/context/sf-clouds.md` (e.g., "Financial Services Cloud" → `financial-services-cloud`).
+
+**Industry domain selection (multi-select via AskUserQuestion).** Ask:
+
+> "Which business industry domains will this project serve? Pick all that apply. The full vocabulary is in `.adlc/context/industry-domains.md`."
+
+Present grouped options. The user can pick across groups:
+
+*BFSI:* `banking-retail`, `banking-corporate`, `banking-sme`, `wealth-management`, `capital-markets`, `insurance-life`, `insurance-general`, `insurance-reinsurance`, `payments`, `lending-digital`, `microfinance`, `account-aggregator`, `kyc-aml`
+
+*Healthcare & Life Sciences:* `provider-hospital`, `provider-clinic`, `payer`, `medtech-devices`, `pharma-rx`, `pharma-generics`, `pharma-biotech`, `clinical-trials`
+
+*CME:* `telco-consumer`, `telco-enterprise`, `telco-network-ops`, `media-broadcast`, `media-digital`, `energy-utilities-power`, `energy-utilities-water-gas`, `energy-renewables`, `oil-and-gas`
+
+*Manufacturing & Auto:* `manufacturing-discrete`, `manufacturing-process`, `automotive-oem`, `automotive-aftermarket`, `automotive-mobility`, `industrial-machinery`
+
+*Consumer & Retail:* `cpg-fmcg`, `cpg-durables`, `retail-fashion`, `retail-grocery`, `retail-pharmacy-omni`, `qsr-foodservice`, `travel-hospitality`, `loyalty-cobrand`, `e-commerce-marketplace`
+
+*Public Sector & Education:* `government-central`, `government-state`, `government-municipal`, `government-defense`, `education-k12`, `education-higher`, `education-edtech`, `nonprofit-india`
+
+*Cross-cutting:* `compliance-data-privacy`, `tax-gst-india`, `field-execution`, `contact-center`, `digital-onboarding`, `revenue-billing`, `sustainability-esg`, `partner-distributor`
+
+The user picks one or more domain keys. If the user is unsure, default to no domains (`[]`) — they can edit `.adlc/config.yml` later.
+
+**Persist the selections** into `.adlc/config.yml`:
+
+```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ "$STACK" = "sfdc" ]; then
+  # Picked values come from AskUserQuestion above. The skill body should set
+  # these two shell vars before this block:
+  #   CLOUDS="platform sales-cloud service-cloud experience-cloud"
+  #   DOMAINS="banking-retail kyc-aml payments"
+  CLOUDS="${CLOUDS:-platform}"
+  DOMAINS="${DOMAINS:-}"
+
+  # Convert space-separated lists to YAML inline-array form: "[a, b, c]"
+  to_yaml_array() {
+    list="$1"
+    [ -z "$list" ] && { printf '[]'; return; }
+    out=""
+    for k in $list; do
+      [ -z "$out" ] && out="$k" || out="$out, $k"
+    done
+    printf '[%s]' "$out"
+  }
+
+  CLOUDS_YAML=$(to_yaml_array "$CLOUDS")
+  DOMAINS_YAML=$(to_yaml_array "$DOMAINS")
+
+  # India-context auto-detect: any India-tier domain flips this on.
+  INDIA_TRIGGER_KEYS=" banking-retail banking-corporate banking-sme wealth-management capital-markets insurance-life insurance-general insurance-reinsurance payments lending-digital microfinance account-aggregator kyc-aml provider-hospital provider-clinic payer medtech-devices pharma-rx pharma-generics pharma-biotech clinical-trials telco-consumer telco-enterprise telco-network-ops media-broadcast media-digital energy-utilities-power energy-utilities-water-gas energy-renewables oil-and-gas manufacturing-discrete manufacturing-process automotive-oem automotive-aftermarket automotive-mobility cpg-fmcg cpg-durables retail-fashion retail-grocery retail-pharmacy-omni qsr-foodservice e-commerce-marketplace government-central government-state government-municipal government-defense education-k12 education-higher education-edtech nonprofit-india tax-gst-india compliance-data-privacy "
+  INDIA_FLAG="false"
+  for d in $DOMAINS; do
+    case "$INDIA_TRIGGER_KEYS" in
+      *" $d "*) INDIA_FLAG="true"; break ;;
+    esac
+  done
+
+  # Write under salesforce.clouds:, salesforce.india_context:, and top-level industry_domains:
+  python3 - "$CLOUDS_YAML" "$DOMAINS_YAML" "$INDIA_FLAG" <<'PY'
+import sys, re, pathlib
+clouds_yaml, domains_yaml, india_flag = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path('.adlc/config.yml')
+text = p.read_text()
+
+def upsert_under_block(text, block, key, value):
+    """Insert or replace `  key: value` inside the named top-level block."""
+    pattern = re.compile(rf'(^{block}:\n(?:[ \t]+.*\n)*)', re.M)
+    m = pattern.search(text)
+    if not m:
+        return text  # block missing — leave file alone
+    body = m.group(1)
+    line_re = re.compile(rf'^([ \t]+){re.escape(key)}:\s*.*$', re.M)
+    if line_re.search(body):
+        new_body = line_re.sub(lambda mm: f'{mm.group(1)}{key}: {value}', body)
+    else:
+        # Append before the block ends.
+        indent = '  '
+        # Detect indent from existing lines under the block.
+        first_indent = re.search(r'^([ \t]+)\S', body[len(f"{block}:\n"):], re.M)
+        if first_indent:
+            indent = first_indent.group(1)
+        new_body = body.rstrip() + f'\n{indent}{key}: {value}\n'
+    return text.replace(body, new_body, 1)
+
+def upsert_top_level(text, key, value):
+    line_re = re.compile(rf'^{re.escape(key)}:\s*.*$', re.M)
+    if line_re.search(text):
+        return line_re.sub(f'{key}: {value}', text, count=1)
+    return text.rstrip() + f'\n\n{key}: {value}\n'
+
+text = upsert_under_block(text, 'salesforce', 'clouds', clouds_yaml)
+text = upsert_under_block(text, 'salesforce', 'india_context', india_flag)
+text = upsert_top_level(text, 'industry_domains', domains_yaml)
+
+p.write_text(text)
+print(f"Wrote salesforce.clouds={clouds_yaml}, salesforce.india_context={india_flag}, industry_domains={domains_yaml}")
+PY
+fi
+```
+
+Tell the user:
+- Selected clouds and industry domains have been written to `.adlc/config.yml`.
+- If `salesforce.india_context: true` was set, every reviewer agent will pull in DPDP/GST/ABDM/ONDC/RBI/IRDAI/SEBI/TRAI anchors when relevant.
+- The selections are editable any time — open `.adlc/config.yml` and add/remove keys from the `clouds:` and `industry_domains:` lists.
+- The full vocabulary lives in `.adlc/context/sf-clouds.md` and `.adlc/context/industry-domains.md`.
 
 ### Step 7.5: Scaffold stack-specific skills catalog & rules
 
@@ -675,6 +856,126 @@ fi
 ```
 
 Document the connected-app setup steps in the project README so other developers can configure their machines (DX MCP + Platform MCP scopes — see toolkit README "Consumer prerequisites").
+
+### Step 7.8: (SFDC only) Install the source-only Salesforce code audit gate
+
+**Skip this step entirely if `$STACK != sfdc`.**
+
+The toolkit ships a vendored copy of `salesforce-code-audit-tool v1.2.13` under `tools/sf-code-audit/`. This step copies the analyzer modules (Apex pattern matcher, LWC analyzer, grading engine) plus the source-only CLI (`audit_source.py`) into the consumer repo so the `/reflect` Phase 5a gate can fire **without an org** and inside any git worktree.
+
+```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ "$STACK" = "sfdc" ]; then
+  TOOLKIT_AUDIT="$TOOLKIT_HOME/tools/sf-code-audit"
+  TOOLKIT_PARTIAL="$TOOLKIT_HOME/partials/run-source-audit.sh"
+
+  if [ ! -f "$TOOLKIT_AUDIT/audit_source.py" ] || [ ! -f "$TOOLKIT_PARTIAL" ]; then
+    echo "ERROR: Audit tool not found at $TOOLKIT_AUDIT or $TOOLKIT_PARTIAL. Toolkit appears corrupted."
+    exit 1
+  fi
+
+  mkdir -p .adlc/tools/sf-code-audit .adlc/partials .adlc/runtime/audit
+
+  # Copy analyzer + grading + CLI modules (overwrite — canonical source-of-truth).
+  cp "$TOOLKIT_AUDIT/audit_source.py" .adlc/tools/sf-code-audit/
+  cp "$TOOLKIT_AUDIT/pattern_matcher.py" .adlc/tools/sf-code-audit/
+  cp "$TOOLKIT_AUDIT/lwc_analyzer.py" .adlc/tools/sf-code-audit/
+  cp "$TOOLKIT_AUDIT/grading_engine.py" .adlc/tools/sf-code-audit/
+  cp "$TOOLKIT_AUDIT/tool_version.json" .adlc/tools/sf-code-audit/
+  cp "$TOOLKIT_AUDIT/update_config.json" .adlc/tools/sf-code-audit/
+  cp "$TOOLKIT_AUDIT/README.md" .adlc/tools/sf-code-audit/
+
+  # Org-connected CLI is optional — copy it too so manual deep audits work.
+  # These have heavier deps (simple-salesforce, pandas, openpyxl, reportlab)
+  # which are NOT installed by default; pip install requirements.txt on demand.
+  cp "$TOOLKIT_AUDIT/salesforce_audit.py" .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/sf_utils.py"        .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/report_generator.py" .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/run_audit.sh"        .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/requirements.txt"    .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/UPSTREAM-README.md"  .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/GRADING_SYSTEM_DETAILED.md"     .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  cp "$TOOLKIT_AUDIT/VIOLATION_CATEGORIES_CORRECTED.md" .adlc/tools/sf-code-audit/ 2>/dev/null || true
+  [ -f .adlc/tools/sf-code-audit/run_audit.sh ] && chmod +x .adlc/tools/sf-code-audit/run_audit.sh
+
+  # Pipeline wrapper.
+  cp "$TOOLKIT_PARTIAL" .adlc/partials/run-source-audit.sh
+  chmod +x .adlc/partials/run-source-audit.sh
+
+  # Verify python3 is reachable. Source-only mode is stdlib-only, but we still
+  # build a project-local venv so the org-connected CLI (salesforce_audit.py)
+  # is also zero-friction the first time someone runs it. No pip pollution of
+  # the system Python.
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 not found on PATH. The audit gate requires Python 3.8+."
+    echo "  Install Python 3 from https://www.python.org/downloads/ and re-run /init."
+    exit 1
+  fi
+
+  PY_VER=$(python3 --version 2>&1 | awk '{print $2}')
+  PY_MAJOR=$(echo "$PY_VER" | cut -d. -f1)
+  PY_MINOR=$(echo "$PY_VER" | cut -d. -f2)
+  if [ "${PY_MAJOR:-0}" -lt 3 ] 2>/dev/null || { [ "${PY_MAJOR:-0}" = "3" ] && [ "${PY_MINOR:-0}" -lt 8 ] 2>/dev/null; }; then
+    echo "ERROR: Python ${PY_VER} is below the 3.8 minimum required by the audit tool."
+    echo "  Install Python 3.8+ from https://www.python.org/downloads/ and re-run /init."
+    exit 1
+  fi
+  echo "Python found: $PY_VER"
+
+  # Create the project-local venv and install all audit deps. The venv is
+  # gitignored (Step 5 added the entry). Skippable via ADLC_INIT_SKIP_AUDIT_PIP=1
+  # for offline / firewalled environments — the source-only gate still works
+  # without these deps; only the org-connected CLI needs them.
+  VENV_DIR=".adlc/tools/sf-code-audit/.venv"
+  if [ "${ADLC_INIT_SKIP_AUDIT_PIP:-0}" = "1" ]; then
+    echo "Skipped audit-tool venv setup (ADLC_INIT_SKIP_AUDIT_PIP=1)."
+    echo "  Source-only /reflect gate still works (stdlib only)."
+    echo "  Org-connected salesforce_audit.py needs deps:"
+    echo "    python3 -m venv $VENV_DIR"
+    echo "    $VENV_DIR/bin/python -m pip install -r .adlc/tools/sf-code-audit/requirements.txt"
+  else
+    if [ ! -d "$VENV_DIR" ]; then
+      echo "Creating audit tool venv at $VENV_DIR (one-time)..."
+      if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+        echo "WARN: 'python3 -m venv' failed (is the 'venv' module available?)."
+        echo "  On Debian/Ubuntu: sudo apt install python3-venv"
+        echo "  Source-only audit gate will still work via system python3."
+      fi
+    else
+      echo "Audit tool venv already present at $VENV_DIR — reusing."
+    fi
+
+    if [ -x "$VENV_DIR/bin/python" ]; then
+      echo "Installing audit tool dependencies into venv (one-time, no system pollution)..."
+      # Quiet, but capture failures. The source-only gate only needs stdlib —
+      # if pip install fails (offline, firewall, build error), surface a warning
+      # but DO NOT fail /init. The wrapper falls back to system python3 and
+      # source-only mode keeps working.
+      if "$VENV_DIR/bin/python" -m pip install --quiet --upgrade pip 2>/dev/null \
+         && "$VENV_DIR/bin/python" -m pip install --quiet -r .adlc/tools/sf-code-audit/requirements.txt; then
+        echo "  Done. Org-connected salesforce_audit.py is ready (no manual pip needed)."
+      else
+        echo "WARN: pip install failed. The source-only audit gate still works (stdlib only)."
+        echo "  To retry the org-connected CLI deps later (e.g., once you're on a network):"
+        echo "    $VENV_DIR/bin/python -m pip install -r .adlc/tools/sf-code-audit/requirements.txt"
+      fi
+    fi
+  fi
+
+  echo "Installed source-only audit at .adlc/tools/sf-code-audit/ and wrapper at .adlc/partials/run-source-audit.sh"
+fi
+```
+
+After this step, the consumer repo has:
+- `.adlc/tools/sf-code-audit/audit_source.py` — source-only CLI (Apex + LWC, no org)
+- `.adlc/tools/sf-code-audit/salesforce_audit.py` — full org-connected CLI (manual deep audits)
+- `.adlc/partials/run-source-audit.sh` — wrapper that reads `.adlc/config.yml` `audit:` block and runs the gate
+- `.adlc/runtime/audit/` — output directory for `source-audit.json` + `source-audit.md`
+
+`/reflect` Phase 1.5 calls the wrapper and refuses to dispatch the LLM reviewer when the gate fails. The default policy (`audit.fail_on: "CRITICAL,HIGH"`) blocks the pipeline when any CRITICAL or HIGH finding lands in toolkit-generated code.
+
+Tell the user: "The Salesforce code audit gate is wired into `/reflect`. It runs against changed files (diff scope) by default and blocks on `CRITICAL`/`HIGH` findings. Tune via `.adlc/config.yml` → `audit:` block. The `salesforce_audit.py` org-connected CLI is also installed for manual deep audits — `pip install -r .adlc/tools/sf-code-audit/requirements.txt` first."
 
 ### Step 8: Verify `.claude/settings.json` (Step 1.6 already created it)
 
@@ -964,7 +1265,7 @@ After this step, the user should see `<project-name>` listed at `http://127.0.0.
 1. Display the created directory structure. If Step 1.5 ran `git init`, call that out and remind the user to wire in a remote (`git remote add origin <url>`).
 2. Confirm `STACK` and `TOOLKIT_HOME` (echo from `~/.adlc/runtime/init-state.sh`) so the user knows which toolkit was used.
 3. Confirm project-local skill symlinks were created — explain that `/architect`, `/proceed`, `/spec`, etc., now resolve to the matching toolkit regardless of `~/.claude/skills`.
-4. **For SFDC projects:** confirm rules and catalog files are in place: `.adlc/context/sf-skills-catalog.md`, `.adlc/context/salesforce-rules.md`.
+4. **For SFDC projects:** confirm rules and catalog files are in place: `.adlc/context/sf-skills-catalog.md`, `.adlc/context/salesforce-rules.md`, `.adlc/context/sf-clouds.md`, `.adlc/context/industry-domains.md`. Echo back the user's selections: `salesforce.clouds: [...]`, `industry_domains: [...]`, `salesforce.india_context: <true|false>`. Confirm the source-only audit gate is installed at `.adlc/tools/sf-code-audit/` and `.adlc/partials/run-source-audit.sh`, and remind the user the `/reflect` skill will block on `CRITICAL`/`HIGH` findings (configurable in `.adlc/config.yml` → `audit:`).
 5. **For MuleSoft projects:** confirm `.adlc/context/mule-skills-catalog.md`, `.adlc/context/mulesoft-rules.md`, `.adlc/partials/mule-quality-checklist.md`. Confirm the official MuleSoft skill pack is installed under `.claude/skills/mule-development`. Remind the user to populate `.env` from `.env.example` with the four connected-app credentials. Remind them to manually populate the remaining `.adlc/config.yml` MuleSoft fields: `anypoint_org_id`, `anypoint_environment`, `anypoint_region`, `api_layer`, and (when `governance.api_manager_enabled: true`) `governance.required_policies` + `governance.governance_ruleset`.
 6. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically).
 7. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo.

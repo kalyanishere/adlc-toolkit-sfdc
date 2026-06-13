@@ -13,6 +13,24 @@ salesforce:
     - "force-app"
   agentforce_variant: ""         # "Employee" | "Service" | "" (not in scope)
   industries: []                 # subset of: [datacloud, agentforce, omnistudio, cme]
+  # Salesforce clouds in scope. /init prompts for these. Reviewer agents branch
+  # on these keys (e.g., FSC compliance gates, CG retail-execution checks).
+  # Legal values are enumerated in .adlc/context/sf-clouds.md.
+  # Examples: [platform, sales-cloud, service-cloud, experience-cloud,
+  #            financial-services-cloud, omnistudio, data-cloud, agentforce]
+  clouds: []
+  # India-specific contextual mode. When true, reviewer agents pull in
+  # India-specific anchors (DPDP, GST, ABDM, ONDC, RBI, IRDAI, SEBI, TRAI).
+  # /init sets this to true when any India-tier industry domain is selected.
+  india_context: false
+
+# Business industry domains the project serves. /init prompts for these.
+# Reviewer agents weight prior lessons tagged with the same domain.
+# Legal values are enumerated in .adlc/context/industry-domains.md.
+# Examples: [banking-retail, wealth-management, insurance-life, payments,
+#            cpg-fmcg, telco-consumer, provider-hospital, automotive-oem,
+#            government-state, education-higher, kyc-aml, compliance-data-privacy]
+industry_domains: []
   features:
     ui_bundles: false            # multi-framework UI Bundles (Beta)
   coverage:
@@ -42,3 +60,13 @@ orgs:
 
 agentforce_test_specs: ""        # path to sf agent test specs (Agentforce only)
 playwright_specs: "tests/e2e"    # /architect requires UI specs when set; "" to opt out
+
+# Source-only Salesforce code audit gate. Runs at /reflect (Phase 5a) before
+# /canary deploys. Tool: tools/sf-code-audit/audit_source.py (vendored
+# salesforce-code-audit-tool v1.2.13). See .adlc/tools/sf-code-audit/README.md.
+audit:
+  enabled: true                  # set false to disable the gate (not recommended)
+  fail_on: "CRITICAL,HIGH"       # severities that block the pipeline; use NONE to advise-only
+  scope: diff                    # diff | full — diff = changed files in this branch only
+  skip_paths: []                 # repo-relative paths to skip in addition to defaults
+  report_dir: ".adlc/runtime/audit"  # where JSON + MD reports are written

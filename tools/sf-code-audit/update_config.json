@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "manifest_url": null,
+  "prompt_for_install": false,
+  "auto_install": false,
+  "copy_local_config": false,
+  "verify_sha256": true
+}

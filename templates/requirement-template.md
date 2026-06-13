@@ -12,6 +12,8 @@ domain: ""          # broad area, e.g., "auth", "payments", "ui"
 stack: []           # tech layers touched, e.g., ["express", "firestore"]
 concerns: []        # cross-cutting dimensions, e.g., ["security", "performance", "a11y"]
 tags: []            # free-form keywords, e.g., ["password-reset", "tokens"]
+sf_clouds: []       # subset of project's salesforce.clouds (see .adlc/context/sf-clouds.md), e.g., ["service-cloud", "experience-cloud"]
+industry_domains: [] # subset of project's industry_domains (see .adlc/context/industry-domains.md), e.g., ["banking-retail", "kyc-aml"]
 ---
 
 <!--

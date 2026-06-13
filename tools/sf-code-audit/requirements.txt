@@ -1,0 +1,31 @@
+# Salesforce Code Audit Tool - Dependencies
+
+# Salesforce API
+simple-salesforce==1.12.6
+
+# Excel generation
+openpyxl==3.1.2
+pandas==2.2.0
+
+# PDF generation
+reportlab==4.0.7
+
+# YAML config parsing
+PyYAML==6.0.1
+
+# HTTP requests
+requests==2.31.0
+
+# CLI and progress bars
+tqdm==4.66.1
+colorama==0.4.6
+
+# Date/time handling
+python-dateutil==2.8.2
+
+# JSON handling
+orjson==3.9.15
+
+# Logging
+python-json-logger==2.0.7
+
