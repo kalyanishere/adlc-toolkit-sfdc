@@ -1,12 +1,25 @@
 {
-  "_comment": "ADLC Salesforce pipeline allowlist — copied into each project's .claude/settings.json by /init. defaultMode is bypassPermissions because /sprint and /proceed run unattended pipelines that fire many routine commands; the allow list below is the safety contract. To require human prompts in your projects, set your user-level ~/.claude/settings.json defaultMode to 'acceptEdits' or 'plan' (project settings override user settings, so set it project-side here too if you want it everywhere). Pre-approves routine git/gh/sf CLI / sf-lint / lint-skills / Apex test / sf agent test / Vlocity preview operations. Production deploys (sf project deploy start, sf agent activate, sf agent publish), Vlocity packDeploy, and destructive data ops (sf data delete/update/upsert/import) currently live in allow for unattended pipeline runs — move them to ask if you want a human gate. git/gh/npm/sh use broad prefix wildcards (anything destructive there is already on the allow list explicitly); sf and vlocity stay granular so the safe/destructive split is auditable.",
+  "_comment": "ADLC Salesforce pipeline allowlist — copied into each project's .claude/settings.json by /init. defaultMode is bypassPermissions because /sprint and /proceed run unattended pipelines that fire many routine commands; the allow list below is the safety contract. To require human prompts in your projects, set your user-level ~/.claude/settings.json defaultMode to 'acceptEdits' or 'plan' (project settings override user settings, so set it project-side here too if you want it everywhere). Pre-approves routine git/gh/sf CLI / sf-lint / lint-skills / Apex test / sf agent test / Vlocity preview operations. Also pre-approves common dev shell utilities (curl, brew, open, unzip, pip, perl, xmllint, pdftotext) and tool dispatchers (sf:* as a coarse fallback, vlocity packGetDiffs/packExport/packDeploy --simulate). Read scopes for ~/.claude/ (skills cache), ~/.adlc/ (runtime state), and /tmp + /private/tmp (synthetic fixtures, scratch worktrees) so devs do not get prompted for these paths every session. WebFetch is allowed for the canonical SFDC/Mule docs sites and GitHub raw — narrower than wildcard, broader than the per-project additions that historically piled up in settings.local.json. Production deploys (sf project deploy start, sf agent activate, sf agent publish), Vlocity packDeploy, and destructive data ops (sf data delete/update/upsert/import) currently live in allow for unattended pipeline runs — move them to ask if you want a human gate. git/gh/npm/sh use broad prefix wildcards (anything destructive there is already on the allow list explicitly); sf and vlocity stay granular so the safe/destructive split is auditable. Project-private paths (absolute /Users/<name>/... or ./.specify/* scripts) are intentionally NOT in the template — those belong in .claude/settings.local.json per project.",
   "permissions": {
     "defaultMode": "bypassPermissions",
     "allow": [
       "Bash(git:*)",
+      "Bash(git -C:*)",
       "Bash(gh:*)",
       "Bash(npm:*)",
       "Bash(npx:*)",
+      "Bash(curl:*)",
+      "Bash(brew:*)",
+      "Bash(open:*)",
+      "Bash(unzip:*)",
+      "Bash(zip:*)",
+      "Bash(split:*)",
+      "Bash(pip:*)",
+      "Bash(pip3:*)",
+      "Bash(perl:*)",
+      "Bash(xmllint:*)",
+      "Bash(pdftotext:*)",
+      "Bash(sf:*)",
       "Bash(sf project deploy validate:*)",
       "Bash(sf project deploy preview:*)",
       "Bash(sf project deploy start --dry-run:*)",
@@ -91,7 +104,20 @@
       "Bash(sf org logout:*)",
       "Bash(vlocity packDeploy:*)",
       "Bash(vlocity packRetry:*)",
-      "Bash(./deploy.sh:*)"
+      "Bash(./deploy.sh:*)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Read(~/.claude/**)",
+      "Read(~/.adlc/**)",
+      "WebFetch(domain:developer.salesforce.com)",
+      "WebFetch(domain:help.salesforce.com)",
+      "WebFetch(domain:trailhead.salesforce.com)",
+      "WebFetch(domain:architect.salesforce.com)",
+      "WebFetch(domain:docs.mulesoft.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Skill(update-config)",
+      "Skill(fewer-permission-prompts)"
     ],
     "ask": [
     ]
