@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-06-01T03:08:40.465Z",
+  "reqs": [
+    {
+      "req": "REQ-258",
+      "title": "Unified Tag-Based Retrieval for /spec (Pilot)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 6,
+        "complete": 6
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.450Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-262",
+      "title": "Backfill tag frontmatter across 4 consumer repos",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 0,
+        "complete": 0
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.451Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-263",
+      "title": "Enforce per-REQ unique worktree paths in /sprint dispatch and /proceed Phase 0",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 3,
+        "complete": 3
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.452Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-380",
+      "title": "Drop /proceed Phase 7.5 (canary) and Phase 8a (snapshot promotion); reduce halt points 5 → 3",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 5,
+        "complete": 5
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.452Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-381",
+      "title": "Drop /bugfix Phase 6 (canary) and fix dangling Phase 7.5 cross-reference",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 3,
+        "complete": 3
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.453Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-425",
+      "title": "Pre-merge detection of corrupted shell constructs in SKILL.md files (catches REQ-424-style substitution disasters before they ship)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 3,
+        "complete": 3
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.460Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-426",
+      "title": "REQ-416 follow-ups bundle: install.sh integrity, reason-string DRY, partials drift, partials tests",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 5,
+        "complete": 5
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.461Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-427",
+      "title": "Fix POSIX violations in analyze/SKILL.md Step 2a",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 1,
+        "complete": 1
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.461Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-441",
+      "title": "Global cross-repo BUG-ID counter (mirror the global REQ counter)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 1,
+        "complete": 1
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.464Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-473",
+      "title": "Global cross-repo LESSON-ID counter (mirror the global REQ/BUG counters)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 1,
+        "complete": 1
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.464Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-474",
+      "title": "Re-platform /sprint orchestration onto Claude Code Dynamic Workflows",
+      "requirementStatus": "approved",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 10,
+        "complete": 9
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.465Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    }
+  ]
+}

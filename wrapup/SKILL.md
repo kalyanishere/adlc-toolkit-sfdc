@@ -272,6 +272,24 @@ Claude drafts the lesson directly from in-context conversation memory. Consider:
 - Were any new conventions established? Propose updates to `<ARTIFACT_ROOT>/.adlc/context/conventions.md`
 - Were any existing conventions found to be problematic?
 
+### Step 4a: Snapshot git-committed metrics
+
+The live `tools/sprint-dashboard` shows in-flight progress for whoever ran the pipeline locally. To give the team a centrally-trackable rollup of REQ status + token usage that survives in git, snapshot this REQ's pipeline state to `.adlc/metrics/<REQ>.json` and regenerate the static `dashboard.html`. Files land in `<ARTIFACT_ROOT>/.adlc/metrics/` and ship as part of the Step 4b knowledge commit.
+
+```bash
+# `/proceed` Phase 0 and Phase 5 already pushed milestone snapshots to
+# origin/main via `--commit`. This Step 4a snapshot updates the metrics
+# files for the wrapup commit Step 4b will land — pass `--milestone
+# phase-8-wrapup` so the row in the dashboard reflects the final state.
+# We do NOT pass --commit here: Step 4b lands the metrics files in the
+# same chore commit as the lessons/assumptions, keeping wrapup atomic.
+node "$ARTIFACT_ROOT/tools/git-dashboard/snapshot.js" \
+  --req REQ-xxx --milestone phase-8-wrapup --root "$ARTIFACT_ROOT" \
+  || echo "wrapup: metrics snapshot failed — non-fatal, continuing" >&2
+```
+
+Substitute the concrete REQ id for `REQ-xxx`. The tool is non-fatal — if `tools/git-dashboard/` is missing (older clone) or the snapshot fails for any reason, surface the warning but continue with Step 4b. Token totals are best-effort and require local Claude transcripts; rows missing tokens render `—` in the static dashboard. The snapshot intentionally has no opinion on Phase 0–8 progression beyond what `pipeline-state.json` already records.
+
 ### Step 4b: Persist Knowledge to `main`
 
 The Phase 2 squash-merge already shipped the feature commits to `main`. Step 4 just wrote new artifacts (lessons, assumptions, status updates, conventions) into `<ARTIFACT_ROOT>` — the **main checkout**, NOT the now-deleted feature worktree. Those files are uncommitted local changes on `main` and will sit there forever unless this step lands them.
@@ -300,7 +318,10 @@ git -C "$ARTIFACT_ROOT" add \
   .adlc/knowledge/lessons/LESSON-*.md \
   .adlc/knowledge/assumptions/ASSUME-*.md \
   .adlc/context/architecture.md \
-  .adlc/context/conventions.md 2>/dev/null || true
+  .adlc/context/conventions.md \
+  .adlc/metrics/REQ-xxx.json \
+  .adlc/metrics/index.json \
+  .adlc/metrics/dashboard.html 2>/dev/null || true
 
 # Bail cleanly if nothing was actually staged (all globs missed).
 git -C "$ARTIFACT_ROOT" diff --cached --quiet && {

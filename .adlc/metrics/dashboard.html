@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ADLC Git Metrics Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d222c;
+    --border: #262c38;
+    --fg: #e6e9ef;
+    --muted: #8b94a7;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --info: #60a5fa;
+    --done: #34d399;
+    --running: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  header { padding: 12px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header input[type="search"] {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--fg);
+    padding: 5px 9px; border-radius: 6px; font-size: 12px; min-width: 200px;
+  }
+  main { padding: 16px 18px 28px; }
+  .summary { display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; }
+  .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .card .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left;
+    vertical-align: top; font-size: 12.5px; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600;
+    text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.6px;
+    cursor: pointer; user-select: none; white-space: nowrap; }
+  th .arr { opacity: 0.6; margin-left: 4px; font-size: 9px; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px;
+    font-size: 11px; font-weight: 500; letter-spacing: 0.2px; }
+  .b-ok    { background: rgba(74,222,128,0.15); color: var(--ok); }
+  .b-info  { background: rgba(96,165,250,0.15); color: var(--info); }
+  .b-warn  { background: rgba(251,191,36,0.15); color: var(--warn); }
+  .b-bad   { background: rgba(248,113,113,0.15); color: var(--bad); }
+  .b-mute  { background: rgba(139,148,167,0.15); color: var(--muted); }
+  .pr-link { color: var(--info); text-decoration: none; }
+  .pr-link:hover { text-decoration: underline; }
+  .phasebar { display: inline-flex; gap: 2px; }
+  .phasebar i { width: 8px; height: 12px; background: var(--panel-2); border-radius: 1px; display: inline-block; }
+  .phasebar i.done { background: var(--done); }
+  .phasebar i.curr { background: var(--running); }
+  .empty { padding: 22px; text-align: center; color: var(--muted); }
+  details { margin-top: 14px; }
+  details summary { cursor: pointer; color: var(--muted); padding: 6px 0; font-size: 11.5px; }
+  pre { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; max-height: 240px; overflow: auto; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ADLC Git Metrics</h1>
+  <span class="meta" id="meta-line">loading…</span>
+  <input type="search" id="filter" placeholder="filter REQ / title / status…" />
+</header>
+<main>
+  <section class="summary" id="summary"></section>
+  <table id="reqs">
+    <thead>
+      <tr>
+        <th data-key="req">REQ <span class="arr"></span></th>
+        <th data-key="title">Title <span class="arr"></span></th>
+        <th data-key="statusKey">Status <span class="arr"></span></th>
+        <th data-key="phaseKey">Phases <span class="arr"></span></th>
+        <th data-key="taskRatio">Tasks <span class="arr"></span></th>
+        <th data-key="totalTokens" class="num">Tokens <span class="arr"></span></th>
+        <th data-key="messages" class="num">Msgs <span class="arr"></span></th>
+        <th data-key="prUrl">PR <span class="arr"></span></th>
+        <th data-key="mergedAt">Merged <span class="arr"></span></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <details>
+    <summary>raw index.json (click to expand)</summary>
+    <pre id="raw"></pre>
+  </details>
+</main>
+<script id="adlc-metrics-data" type="application/json">
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-06-01T03:08:40.465Z",
+  "reqs": [
+    {
+      "req": "REQ-258",
+      "title": "Unified Tag-Based Retrieval for /spec (Pilot)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 6,
+        "complete": 6
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.450Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-262",
+      "title": "Backfill tag frontmatter across 4 consumer repos",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 0,
+        "complete": 0
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.451Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-263",
+      "title": "Enforce per-REQ unique worktree paths in /sprint dispatch and /proceed Phase 0",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 3,
+        "complete": 3
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.452Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-380",
+      "title": "Drop /proceed Phase 7.5 (canary) and Phase 8a (snapshot promotion); reduce halt points 5 → 3",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 5,
+        "complete": 5
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.452Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-381",
+      "title": "Drop /bugfix Phase 6 (canary) and fix dangling Phase 7.5 cross-reference",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 3,
+        "complete": 3
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.453Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-425",
+      "title": "Pre-merge detection of corrupted shell constructs in SKILL.md files (catches REQ-424-style substitution disasters before they ship)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 3,
+        "complete": 3
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.460Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-426",
+      "title": "REQ-416 follow-ups bundle: install.sh integrity, reason-string DRY, partials drift, partials tests",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 5,
+        "complete": 5
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.461Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-427",
+      "title": "Fix POSIX violations in analyze/SKILL.md Step 2a",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 1,
+        "complete": 1
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.461Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-441",
+      "title": "Global cross-repo BUG-ID counter (mirror the global REQ counter)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 1,
+        "complete": 1
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.464Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-473",
+      "title": "Global cross-repo LESSON-ID counter (mirror the global REQ/BUG counters)",
+      "requirementStatus": "complete",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 1,
+        "complete": 1
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.464Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    },
+    {
+      "req": "REQ-474",
+      "title": "Re-platform /sprint orchestration onto Claude Code Dynamic Workflows",
+      "requirementStatus": "approved",
+      "completed": false,
+      "terminalState": null,
+      "currentPhase": null,
+      "completedPhases": [],
+      "complexity": null,
+      "tasks": {
+        "total": 10,
+        "complete": 9
+      },
+      "startedAt": null,
+      "lastUpdatedAt": "2026-06-01T03:08:40.465Z",
+      "merged": false,
+      "mergedAt": null,
+      "prUrl": null,
+      "repoCount": 0,
+      "tokens": {
+        "captured": false,
+        "reason": "no-pipeline-state"
+      }
+    }
+  ]
+}
+</script>
+<script>
+(function () {
+  function loadData() {
+    const el = document.getElementById('adlc-metrics-data');
+    try { return JSON.parse(el.textContent); }
+    catch (_) { return { schemaVersion: 1, generatedAt: null, reqs: [] }; }
+  }
+  function statusKey(r) {
+    if (r.merged) return 0;
+    if (r.completed) return 1;
+    if (r.requirementStatus === 'complete') return 1;
+    if (r.terminalState === 'failed' || r.terminalState === 'aborted') return 2;
+    if (typeof r.currentPhase === 'number') return 3;
+    if (r.requirementStatus === 'in-progress' || r.requirementStatus === 'approved') return 3;
+    return 4;
+  }
+  function statusBadge(r) {
+    if (r.merged) return ['Merged', 'b-ok'];
+    if (r.completed) return ['Complete', 'b-info'];
+    if (r.terminalState === 'failed') return ['Failed', 'b-bad'];
+    if (r.terminalState === 'aborted') return ['Aborted', 'b-warn'];
+    if (typeof r.currentPhase === 'number') return [`Phase ${r.currentPhase}`, 'b-info'];
+    // No pipeline-state — fall back to requirement.md frontmatter status.
+    if (r.requirementStatus === 'complete') return ['Complete', 'b-info'];
+    if (r.requirementStatus === 'in-progress') return ['In progress', 'b-info'];
+    if (r.requirementStatus === 'approved') return ['Approved', 'b-mute'];
+    if (r.requirementStatus === 'draft') return ['Draft', 'b-mute'];
+    return ['Pending', 'b-mute'];
+  }
+  function phaseBar(r) {
+    const set = new Set(r.completedPhases || []);
+    const out = [];
+    for (let p = 0; p <= 8; p++) {
+      const cls = set.has(p) ? 'done' : (r.currentPhase === p ? 'curr' : '');
+      out.push(`<i class="${cls}" title="Phase ${p}${set.has(p) ? ' — complete' : (r.currentPhase === p ? ' — in flight' : '')}"></i>`);
+    }
+    return `<span class="phasebar">${out.join('')}</span>`;
+  }
+  function fmt(n) {
+    if (n == null) return '—';
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return (n/1000).toFixed(n < 10_000 ? 2 : 1) + 'k';
+    return (n/1_000_000).toFixed(2) + 'M';
+  }
+  function totalTokens(t) {
+    if (!t || !t.captured) return null;
+    return (t.input || 0) + (t.output || 0) + (t.cacheCreate || 0);
+  }
+  function shortPr(url) {
+    if (!url) return null;
+    const m = url.match(/\/pull\/(\d+)/);
+    if (!m) return url;
+    const repo = (url.match(/github\.com\/([^/]+\/[^/]+)\//) || [])[1] || '';
+    return repo ? `${repo}#${m[1]}` : `#${m[1]}`;
+  }
+  function renderSummary(reqs) {
+    const merged = reqs.filter(r => r.merged).length;
+    const inflight = reqs.filter(r => !r.merged && !r.completed && r.currentPhase != null).length;
+    const totalTok = reqs.reduce((s, r) => s + (totalTokens(r.tokens) || 0), 0);
+    const totalMsgs = reqs.reduce((s, r) => s + (r.tokens?.captured ? (r.tokens.messages || 0) : 0), 0);
+    const captured = reqs.filter(r => r.tokens?.captured).length;
+    document.getElementById('summary').innerHTML = `
+      <div class="card"><div class="label">REQs tracked</div>
+        <div class="value">${reqs.length}</div>
+        <div class="sub">${captured} with token data</div></div>
+      <div class="card"><div class="label">Merged</div>
+        <div class="value">${merged}</div>
+        <div class="sub">${inflight} in flight</div></div>
+      <div class="card"><div class="label">Tokens (input + output + cache-create)</div>
+        <div class="value">${fmt(totalTok)}</div>
+        <div class="sub">across ${fmt(totalMsgs)} assistant msgs</div></div>
+    `;
+  }
+  function rowFields(r) {
+    const tot = totalTokens(r.tokens);
+    return {
+      ...r,
+      taskRatio: r.tasks && r.tasks.total ? r.tasks.complete / r.tasks.total : 0,
+      taskLabel: r.tasks ? `${r.tasks.complete}/${r.tasks.total}` : '—',
+      totalTokens: tot,
+      messages: r.tokens?.captured ? (r.tokens.messages || 0) : null,
+      statusKey: statusKey(r),
+      phaseKey: (r.completedPhases || []).length,
+    };
+  }
+  function render(state) {
+    const tbody = document.querySelector('#reqs tbody');
+    const filt = state.filter.trim().toLowerCase();
+    const rows = state.rows
+      .filter(r => !filt || (`${r.req} ${r.title || ''} ${r.requirementStatus || ''}`).toLowerCase().includes(filt))
+      .slice()
+      .sort((a, b) => {
+        const k = state.sortKey;
+        const av = a[k]; const bv = b[k];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (av < bv) return state.sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return state.sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td class="empty" colspan="9">no rows match</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const [label, cls] = statusBadge(r);
+      const pr = shortPr(r.prUrl);
+      const merged = r.mergedAt ? r.mergedAt.slice(0, 10) : '—';
+      const tokensCell = r.tokens?.captured
+        ? `<span title="in ${fmt(r.tokens.input)} · out ${fmt(r.tokens.output)} · cache-create ${fmt(r.tokens.cacheCreate)} · cache-read ${fmt(r.tokens.cacheRead)}">${fmt(r.totalTokens)}</span>`
+        : `<span class="b-mute" title="${r.tokens?.reason || 'no token data'}">—</span>`;
+      return `<tr>
+        <td><strong>${r.req}</strong></td>
+        <td>${escape(r.title || '')}</td>
+        <td><span class="badge ${cls}">${label}</span></td>
+        <td>${phaseBar(r)}</td>
+        <td>${r.taskLabel}</td>
+        <td class="num">${tokensCell}</td>
+        <td class="num">${r.messages == null ? '—' : fmt(r.messages)}</td>
+        <td>${pr ? `<a class="pr-link" target="_blank" rel="noopener" href="${escapeAttr(r.prUrl)}">${escape(pr)}</a>` : '—'}</td>
+        <td>${merged}</td>
+      </tr>`;
+    }).join('');
+    document.querySelectorAll('#reqs th').forEach(th => {
+      const arr = th.querySelector('.arr');
+      if (!arr) return;
+      arr.textContent = th.dataset.key === state.sortKey
+        ? (state.sortDir === 'asc' ? '▲' : '▼') : '';
+    });
+  }
+  function escape(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]); }
+  function escapeAttr(s) { return escape(s).replace(/"/g, '&quot;'); }
+  const data = loadData();
+  document.getElementById('raw').textContent = JSON.stringify(data, null, 2);
+  document.getElementById('meta-line').textContent =
+    `${data.reqs.length} REQ(s) · index ${data.generatedAt ? 'last updated ' + data.generatedAt.replace('T', ' ').slice(0, 16) + 'Z' : 'never'}`;
+  const state = {
+    rows: data.reqs.map(rowFields),
+    filter: '',
+    sortKey: 'statusKey',
+    sortDir: 'asc',
+  };
+  renderSummary(data.reqs);
+  render(state);
+  document.getElementById('filter').addEventListener('input', (e) => {
+    state.filter = e.target.value; render(state);
+  });
+  document.querySelectorAll('#reqs th').forEach(th => {
+    th.addEventListener('click', () => {
+      const k = th.dataset.key;
+      if (state.sortKey === k) state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+      else { state.sortKey = k; state.sortDir = 'asc'; }
+      render(state);
+    });
+  });
+})();
+</script>
+</body>
+</html>

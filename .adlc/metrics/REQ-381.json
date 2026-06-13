@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-381",
+  "specSlug": "REQ-381-bugfix-canary-topology-cleanup",
+  "title": "Drop /bugfix Phase 6 (canary) and fix dangling Phase 7.5 cross-reference",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 3,
+    "complete": 3
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.453Z"
+  }
+}

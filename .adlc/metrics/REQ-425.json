@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-425",
+  "specSlug": "REQ-425-skill-md-corruption-detection",
+  "title": "Pre-merge detection of corrupted shell constructs in SKILL.md files (catches REQ-424-style substitution disasters before they ship)",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 3,
+    "complete": 3
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.460Z"
+  }
+}

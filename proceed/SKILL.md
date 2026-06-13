@@ -274,6 +274,20 @@ sh .adlc/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1 \
 
 **After completing Step 0**: Update `pipeline-state.json` — add `0` to `completedPhases`, add Step 0 to `phaseHistory`, set `currentPhase` to `1`.
 
+**Metrics announcement (REQ started)**: snapshot this REQ's pipeline state to `.adlc/metrics/`, then commit + push to `origin/main` so teammates immediately see the new REQ on the static git dashboard. The script handles fetch + rebase + lock against concurrent `/sprint` runs and is non-fatal — failures log a warning and the pipeline continues.
+
+```bash
+# Run from the primary repo's MAIN CHECKOUT — not the worktree (worktrees
+# don't exist yet at end of Step 0). At later milestones (Phase 5, Phase 8)
+# pass --root pointing at repos[primary].path from pipeline-state.json.
+node "$ARTIFACT_ROOT/tools/git-dashboard/snapshot.js" \
+  --req REQ-xxx --milestone phase-0-started \
+  --root "$ARTIFACT_ROOT" --commit \
+  || true   # non-fatal — never block /proceed on metrics push
+```
+
+If `tools/git-dashboard/snapshot.js` is missing (older clone), skip silently — the milestone push is best-effort.
+
 ---
 
 ### Phase 1: Validate the Requirement Spec
@@ -390,6 +404,18 @@ log: one line per tier with finished `TASK-xxx [repo] ✓` and any failures.
 ### Phase 5: Verify (Reflect + Review in Parallel)
 
 **Gate**: `currentPhase` must be `5`. After completion: append `5`, set `currentPhase=6`.
+
+**Metrics announcement (entering verify)**: at the start of Phase 5 — after the gate check, before the reviewer dispatch — snapshot this REQ and push to `origin/main` so the static dashboard advances the REQ from "implementing" to "in review". This runs against the **primary repo's main checkout** (read `repos[<primary>].path` from `pipeline-state.json`), NOT the worktree — pushing from a feature worktree would target the feature branch.
+
+```bash
+# MAIN_CHECKOUT = jq -r '.repos[(.repos | to_entries | map(select(.value.primary)) | .[0].key)].path' < pipeline-state.json
+node "$MAIN_CHECKOUT/tools/git-dashboard/snapshot.js" \
+  --req REQ-xxx --milestone phase-5-verify \
+  --root "$MAIN_CHECKOUT" --commit \
+  || true
+```
+
+Non-fatal — same contract as the Phase 0 hook.
 
 **Goal**: Self-assess AND multi-agent review the implementation, then fix all findings in a single consolidated pass.
 

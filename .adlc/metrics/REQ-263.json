@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-263",
+  "specSlug": "REQ-263-sprint-worktree-isolation",
+  "title": "Enforce per-REQ unique worktree paths in /sprint dispatch and /proceed Phase 0",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 3,
+    "complete": 3
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.452Z"
+  }
+}

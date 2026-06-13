@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-441",
+  "specSlug": "REQ-441-global-bug-counter",
+  "title": "Global cross-repo BUG-ID counter (mirror the global REQ counter)",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 1,
+    "complete": 1
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.464Z"
+  }
+}

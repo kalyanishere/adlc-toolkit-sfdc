@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-474",
+  "specSlug": "REQ-474-sprint-dynamic-workflows-engine",
+  "title": "Re-platform /sprint orchestration onto Claude Code Dynamic Workflows",
+  "requirementStatus": "approved",
+  "tasks": {
+    "total": 10,
+    "complete": 9
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.465Z"
+  }
+}

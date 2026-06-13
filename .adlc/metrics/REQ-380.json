@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-380",
+  "specSlug": "REQ-380-drop-proceed-phase-7-5-and-8a",
+  "title": "Drop /proceed Phase 7.5 (canary) and Phase 8a (snapshot promotion); reduce halt points 5 → 3",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 5,
+    "complete": 5
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.452Z"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-262",
+  "specSlug": "REQ-262-backfill-tag-frontmatter",
+  "title": "Backfill tag frontmatter across 4 consumer repos",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 0,
+    "complete": 0
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.451Z"
+  }
+}

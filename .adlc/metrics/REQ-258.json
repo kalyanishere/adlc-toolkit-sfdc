@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-258",
+  "specSlug": "REQ-258-unified-retrieval-spec-pilot",
+  "title": "Unified Tag-Based Retrieval for /spec (Pilot)",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 6,
+    "complete": 6
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.450Z"
+  }
+}

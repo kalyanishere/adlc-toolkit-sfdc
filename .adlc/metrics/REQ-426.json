@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "req": "REQ-426",
+  "specSlug": "REQ-426-toolkit-followups-bundle",
+  "title": "REQ-416 follow-ups bundle: install.sh integrity, reason-string DRY, partials drift, partials tests",
+  "requirementStatus": "complete",
+  "tasks": {
+    "total": 5,
+    "complete": 5
+  },
+  "pipeline": null,
+  "repos": [],
+  "tokens": {
+    "captured": false,
+    "reason": "no-pipeline-state"
+  },
+  "sourceMtimes": {
+    "pipelineState": null,
+    "requirement": "2026-06-01T03:08:40.461Z"
+  }
+}
